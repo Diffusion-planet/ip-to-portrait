@@ -1,0 +1,81 @@
+// Diffusion Planet - Database ERD
+// https://dbdiagram.io 에서 사용
+
+// ===========================================
+// PostgreSQL Tables
+// ===========================================
+
+Table users {
+  id varchar(255) [pk, note: 'UUID']
+  email varchar(255) [unique, not null]
+  name varchar(255) [not null]
+  hashed_password varchar(255) [not null]
+  is_active boolean [default: true]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [note: 'ON UPDATE']
+
+  indexes {
+    email [unique]
+  }
+}
+
+Table history {
+  id varchar(255) [pk, note: 'UUID']
+  user_id varchar(255) [ref: > users.id, not null, note: 'CASCADE DELETE']
+  title varchar(255) [note: 'nullable']
+  face_image_url varchar(500) [not null]
+  face_image_id varchar(255)
+  reference_image_url varchar(500) [note: 'Background image']
+  reference_image_id varchar(255)
+  result_urls jsonb [default: '[]', note: 'Generated image URLs array']
+  prompt text [note: 'User prompt']
+  params jsonb [default: '{}', note: 'Generation parameters (아래 구조 참조)']
+  count varchar(255) [default: '1', note: 'Number of generations']
+  parallel boolean [default: false, note: 'Parallel generation mode']
+  is_favorite boolean [default: false]
+  created_at timestamp [default: `now()`]
+
+  indexes {
+    user_id
+  }
+}
+
+// ===========================================
+// params JSONB 구조 (참고용)
+// ===========================================
+// {
+//   "prompt": "young adult, natural features...",
+//   "seed": -1,
+//   "steps": 50,
+//   "guidance_scale": 3.0,
+//   "denoise_strength": 0.92,
+//   "face_strength": 0.85,
+//   "stop_at": 1.0,
+//   "adapter_mode": "faceid_plus",
+//   "face_blend_weight": 0.6,
+//   "hair_blend_weight": 0.4,
+//   "mask_blur": 15,
+//   "mask_expand": 0.3,
+//   "mask_padding": 10,
+//   "include_hair": true,
+//   "include_neck": true,
+//   "auto_prompt": false
+// }
+
+// ===========================================
+// result_urls JSONB 구조 (참고용)
+// ===========================================
+// [
+//   "/uploads/results/uuid-1.png",
+//   "/uploads/results/uuid-2.png",
+//   "/uploads/results/uuid-3.png",
+//   "/uploads/results/uuid-4.png"
+// ]
+
+// ===========================================
+// Alembic Migration Table (자동 생성)
+// ===========================================
+
+Table alembic_version {
+  version_num varchar(32) [pk, not null]
+}

@@ -1,0 +1,40 @@
+# Output files
+outputs/
+output*.png
+output*.txt
+
+# Input test images
+inputs/
+face-image.png
+reference-image.png
+reference-*.jpg
+sinsia-*.jpg
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model cache
+models_cache/
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# Web backend generated files
+web/backend/uploads/
+web/backend/outputs/
+web/backend/data/
+
+# Node modules
+node_modules/
+
+# Next.js build
+.next/
+
+# IDE
+.idea/
+.vscode/

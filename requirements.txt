@@ -1,0 +1,32 @@
+# Inpainting Pipeline Requirements
+# Python 3.10, 3.11, 3.12 supported
+# Tested: 2026-01
+
+# PyTorch (MPS/CUDA/CPU)
+# 2.8.0 recommended for stability, 2.9.1 is latest but has macOS 26 issues
+torch>=2.8.0,<2.10.0
+torchvision>=0.18.0,<0.20.0
+
+# Diffusers (latest stable)
+diffusers>=0.35.0,<0.37.0
+transformers>=4.40.0,<5.0.0
+accelerate>=0.30.0,<1.0.0
+safetensors>=0.4.0
+
+# Image processing
+pillow>=10.0.0
+numpy>=1.24.0,<2.0.0
+opencv-python>=4.8.0
+scipy>=1.10.0  # For BiSeNet morphological operations
+
+# Face detection (native M1/M2/M3 support from 0.10.0+)
+mediapipe>=0.10.14,<0.11.0
+
+# Hugging Face
+huggingface-hub>=0.23.0
+
+# FaceID mode (optional - for IP-Adapter FaceID Plus v2)
+# Install: pip install insightface onnxruntime
+# For Apple Silicon: pip install insightface onnxruntime-silicon
+insightface>=0.7.3
+onnxruntime>=1.17.0  # For CPU/CUDA; use onnxruntime-silicon for Apple Silicon
