@@ -46,8 +46,8 @@ interface InpaintingParamsNodeProps {
 const MODE_OPTIONS = [
   { value: 'standard', label: 'Standard (CLIP)' },
   { value: 'faceid', label: 'FaceID' },
-  { value: 'faceid_plus', label: 'FaceID Plus v2' },
-  { value: 'clip_blend', label: 'CLIP Blend (Recommended)' },
+  { value: 'faceid_plus', label: 'FaceID Plus v2 (Recommended)' },
+  { value: 'clip_blend', label: 'CLIP Blend' },
 ]
 
 export function InpaintingParamsNode({
