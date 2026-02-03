@@ -99,15 +99,26 @@ export function GenerationControlNode({
         {/* Seed */}
         <div className="flex items-center justify-between">
           <span className="text-3xl text-text-secondary font-medium">Seed</span>
-          <input
-            type="text"
-            value={seedInput || (seed === -1 ? '' : String(seed))}
-            onFocus={handleSeedFocus}
-            onChange={handleSeedChange}
-            onBlur={handleSeedBlur}
-            className="w-44 px-5 py-4 text-2xl text-right bg-black/30 border border-border rounded nodrag"
-            placeholder="Random"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={seedInput || (seed === -1 ? '' : String(seed))}
+              onFocus={handleSeedFocus}
+              onChange={handleSeedChange}
+              onBlur={handleSeedBlur}
+              className="w-32 px-5 py-4 text-2xl text-right bg-black/30 border border-border rounded nodrag"
+              placeholder="Random"
+            />
+            <button
+              onClick={() => {
+                onSeedChange(-1)
+                setSeedInput('')
+              }}
+              className="px-4 py-4 text-xl bg-black/30 border border-border rounded hover:bg-black/50 transition-colors nodrag"
+            >
+              Random
+            </button>
+          </div>
         </div>
 
         {/* Generate Button */}

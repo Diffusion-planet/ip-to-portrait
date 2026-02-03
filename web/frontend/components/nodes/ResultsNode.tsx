@@ -143,10 +143,9 @@ function ResultCard({ result, onExpand, onDownload }: ResultCardProps) {
           {/* Preview image if available */}
           {previewUrl && (
             <img
-              key={previewUrl}
               src={`http://localhost:8008${previewUrl}`}
               alt="Preview"
-              className="w-full h-full object-cover opacity-80"
+              className="w-full h-full object-cover opacity-80 transition-opacity duration-300"
             />
           )}
           {/* Progress overlay */}

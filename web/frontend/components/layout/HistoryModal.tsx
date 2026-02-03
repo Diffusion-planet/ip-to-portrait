@@ -225,7 +225,7 @@ export function HistoryModal({ isOpen, onClose, onRestore }: HistoryModalProps) 
             <div className="grid grid-cols-1 gap-4">
               {history.map((item, index) => (
                 <div
-                  key={item.id}
+                  key={`${item.id}-${index}`}
                   className="bg-[#242424] rounded-[18px] border border-[rgba(255,255,255,0.05)] p-4 hover:border-[rgba(255,255,255,0.15)] transition-colors cursor-pointer"
                   onClick={() => {
                     onRestore?.(item, index)

@@ -14,6 +14,7 @@ from models import GenerationParams, TaskStatus, ProgressMessage, WebSocketMessa
 from .task_manager import task_manager
 from .websocket_manager import websocket_manager
 from core.config import settings
+from pipeline_loader import get_pipeline
 
 # Paths
 PIPELINE_DIR = Path(__file__).parent.parent.parent.parent
@@ -393,10 +394,94 @@ class PipelineService:
         seed: int,
         output_index: int,
     ) -> Optional[Path]:
-        """Execute the inpainting pipeline via subprocess"""
+        """Execute the inpainting pipeline - try preloaded model first, fallback to subprocess"""
 
         output_filename = f"{batch_id}_{output_index}.png"
         output_path = self.output_dir / output_filename
+
+        # Try preloaded pipeline first
+        pipeline = get_pipeline()
+        if pipeline is not None:
+            return await self._execute_pipeline_direct(
+                pipeline, task_id, batch_id, face_image_path, background_path,
+                params, seed, output_index, output_path
+            )
+
+        # Fallback to subprocess if no preloaded pipeline
+        return await self._execute_pipeline_subprocess(
+            task_id, batch_id, face_image_path, background_path,
+            params, seed, output_index, output_path
+        )
+
+    async def _execute_pipeline_direct(
+        self,
+        pipeline,
+        task_id: str,
+        batch_id: str,
+        face_image_path: Path,
+        background_path: Path,
+        params: GenerationParams,
+        seed: int,
+        output_index: int,
+        output_path: Path,
+    ) -> Optional[Path]:
+        """Execute pipeline directly using preloaded model"""
+
+        try:
+            # Run in thread pool to avoid blocking
+            import concurrent.futures
+            from PIL import Image
+
+            def run_pipeline():
+                result = pipeline.composite_face_auto(
+                    background_path=str(background_path),
+                    source_face_path=str(face_image_path),
+                    prompt=params.prompt or "professional portrait, natural expression",
+                    output_path=str(output_path),
+                    face_strength=params.face_strength,
+                    denoising_strength=params.denoise_strength,
+                    num_inference_steps=params.steps,
+                    guidance_scale=params.guidance_scale,
+                    mask_expand=params.mask_expand,
+                    mask_blur=params.mask_blur,
+                    seed=seed,
+                    include_hair=params.include_hair,
+                    include_neck=params.include_neck,
+                    face_blend_weight=params.face_blend_weight,
+                    hair_blend_weight=params.hair_blend_weight,
+                    mask_padding=params.mask_padding,
+                    stop_at=params.stop_at,
+                    save_preview=True,
+                )
+                return result
+
+            # Run in executor
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                result = await loop.run_in_executor(executor, run_pipeline)
+
+            # Check if output exists
+            if output_path.exists():
+                return output_path
+            else:
+                raise Exception("Pipeline did not generate output file")
+
+        except Exception as e:
+            print(f"[Pipeline Direct] Error: {e}")
+            raise
+
+    async def _execute_pipeline_subprocess(
+        self,
+        task_id: str,
+        batch_id: str,
+        face_image_path: Path,
+        background_path: Path,
+        params: GenerationParams,
+        seed: int,
+        output_index: int,
+        output_path: Path,
+    ) -> Optional[Path]:
+        """Execute the inpainting pipeline via subprocess (fallback)"""
 
         # Build command (use venv Python for package access)
         cmd = [

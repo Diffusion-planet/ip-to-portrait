@@ -255,6 +255,20 @@ Stop-At 파라미터는 IP-Adapter FaceID가 생성에 영향을 미치는 것�
 >
 > Runpod은 Docker 컨테이너 내에서 실행되므로 Docker-in-Docker가 불가능합니다. 따라서 PostgreSQL과 Redis를 직접 설치합니다.
 
+#### (선택) 개발 환경 설정
+
+> **선택 사항**: Runpod 환경을 보다 편리하게 사용하고 싶다면, Claude Code와 Oh My Zsh 등 개발 도구를 자동으로 설치할 수 있습니다.
+
+```bash
+bash scripts/setup.sh
+```
+
+이 스크립트가 설치하는 내용:
+- Oh My Zsh (터미널 테마 및 플러그인)
+- Claude Code CLI 및 VS Code 확장
+- 한국어 언어 팩
+- 개발 유틸리티 (zsh, tmux, nvtop 등)
+
 #### 자동 설치 (스크립트 사용)
 
 ```bash

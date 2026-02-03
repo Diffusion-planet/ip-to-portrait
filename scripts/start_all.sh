@@ -1,31 +1,12 @@
 #!/bin/bash
-# =============================================================================
-# IP-to-Portrait - 모든 서비스 시작 (백그라운드)
-# =============================================================================
-# 실행 명령어:
-#   bash scripts/start_all.sh
-#   ./scripts/start_all.sh
-# =============================================================================
-# Backend: foreground, Celery/Frontend: background
-# 로그 파일: /tmp/celery.log, /tmp/frontend.log
-# =============================================================================
+# Start all IP-to-Portrait services
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VENV_DIR="$PROJECT_ROOT/venv"
-VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_CELERY="$VENV_DIR/bin/celery"
 
 echo "============================================="
 echo "  Starting IP-to-Portrait Services"
 echo "============================================="
-
-# Check venv exists
-if [ ! -f "$VENV_PYTHON" ]; then
-    echo "ERROR: venv not found at $VENV_DIR"
-    echo "Run setup_backend.sh first!"
-    exit 1
-fi
 
 # Ensure services are running
 echo "[1/4] Starting PostgreSQL..."
@@ -38,10 +19,13 @@ redis-server --daemonize yes 2>/dev/null || true
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# Start Celery in background (using venv celery directly)
+# Activate venv
+source "$PROJECT_ROOT/venv/bin/activate"
+
+# Start Celery in background
 echo "[3/4] Starting Celery worker in background..."
 cd "$PROJECT_ROOT/web/backend"
-nohup "$VENV_CELERY" -A tasks worker --loglevel=info -Q gpu_queue --concurrency=1 > /tmp/celery.log 2>&1 &
+nohup celery -A tasks worker --loglevel=info -Q gpu_queue --concurrency=1 > /tmp/celery.log 2>&1 &
 CELERY_PID=$!
 echo "Celery worker started (PID: $CELERY_PID)"
 
@@ -69,6 +53,6 @@ echo ""
 echo "Starting backend server..."
 echo ""
 
-# Start backend in foreground (using venv python directly)
+# Start backend in foreground
 cd "$PROJECT_ROOT/web/backend"
-"$VENV_PYTHON" main.py
+python main.py

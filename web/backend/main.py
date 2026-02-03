@@ -12,6 +12,7 @@ from pathlib import Path
 from routers import generation, upload, history, settings, auth
 from services.websocket_manager import websocket_endpoint
 from core.database import init_db, close_db
+from pipeline_loader import warmup_pipeline
 
 
 @asynccontextmanager
@@ -22,6 +23,11 @@ async def lifespan(app: FastAPI):
     # Run `alembic upgrade head` to apply migrations.
     # init_db() is kept for backwards compatibility but tables should be created via alembic.
     await init_db()
+
+    # Preload models for faster generation
+    # print("🚀 Preloading models...")
+    # warmup_pipeline()
+
     yield
     # Shutdown
     await close_db()

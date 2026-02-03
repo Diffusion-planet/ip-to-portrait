@@ -1,47 +1,50 @@
 """
-Pre-load models when Celery worker starts
+Pre-load models when backend/worker starts
 Models are loaded once and reused for all tasks
 """
 
 import sys
+import importlib.util
 from pathlib import Path
 
-# Add parent directory to path to import inpainting-pipeline
+# Add parent directory to path to import inpainting-pipeline.py
 BACKEND_DIR = Path(__file__).parent
 PIPELINE_DIR = BACKEND_DIR.parent.parent
-sys.path.insert(0, str(PIPELINE_DIR))
+PIPELINE_SCRIPT = PIPELINE_DIR / "inpainting-pipeline.py"
 
-# Import after adding to path
-try:
-    # This will be implemented after we refactor inpainting-pipeline.py
-    from inpainting_pipeline_module import FaceInpaintingPipeline
+# Global pipeline instance
+_pipeline = None
 
-    # Global pipeline instance
-    _pipeline = None
-
-    def get_pipeline():
-        """Get or create the global pipeline instance"""
-        global _pipeline
-        if _pipeline is None:
+def get_pipeline():
+    """Get or create the global pipeline instance"""
+    global _pipeline
+    if _pipeline is None:
+        try:
             print("🔄 Loading models into memory (this may take a minute)...")
-            _pipeline = FaceInpaintingPipeline(
-                device="cuda",
-                use_bisenet=True,
-                adapter_mode="faceid_plus"
-            )
-            print("✅ Models loaded successfully! Ready for fast generation.")
-        return _pipeline
 
-    def warmup_pipeline():
-        """Warmup the pipeline when worker starts"""
-        get_pipeline()
+            # Import inpainting-pipeline.py using importlib
+            spec = importlib.util.spec_from_file_location("inpainting_pipeline", PIPELINE_SCRIPT)
+            if spec and spec.loader:
+                pipeline_module = importlib.util.module_from_spec(spec)
+                sys.modules["inpainting_pipeline"] = pipeline_module
+                spec.loader.exec_module(pipeline_module)
 
-except ImportError as e:
-    print(f"⚠️  Could not import pipeline module: {e}")
-    print("⚠️  Will fall back to subprocess method")
+                # Create pipeline instance with FaceID Plus v2 (recommended)
+                _pipeline = pipeline_module.AutoIDPhotoCompositor(
+                    detection_method='opencv',
+                    use_bisenet=True,
+                    use_faceid_plus=True
+                )
+                print("✅ Models loaded successfully! Ready for fast generation.")
+            else:
+                raise ImportError(f"Could not load {PIPELINE_SCRIPT}")
+        except Exception as e:
+            print(f"⚠️  Could not load pipeline: {e}")
+            print("⚠️  Will fall back to subprocess method")
+            _pipeline = None
 
-    def get_pipeline():
-        return None
+    return _pipeline
 
-    def warmup_pipeline():
-        pass
+def warmup_pipeline():
+    """Warmup the pipeline when worker/server starts"""
+    get_pipeline()
