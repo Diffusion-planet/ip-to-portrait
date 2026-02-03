@@ -232,17 +232,178 @@ Stop-At 파라미터는 IP-Adapter FaceID가 생성에 영향을 미치는 것�
 
 - Python 3.10 이상
 - Node.js 18 이상
-- Docker 및 Docker Compose (PostgreSQL, Redis용)
 - NVIDIA GPU with CUDA (권장) 또는 Apple Silicon Mac
+- PostgreSQL 16+, Redis 7+ (Docker 또는 직접 설치)
 
-### 1. 레포지토리 클론
+### ONNX Runtime 설치 가이드
+
+플랫폼에 따라 적절한 ONNX Runtime 패키지를 설치해야 합니다:
+
+| 플랫폼 | 설치 명령어 |
+|--------|-------------|
+| **NVIDIA CUDA GPU** | `pip install onnxruntime-gpu>=1.17.0` |
+| **Apple Silicon (M1/M2/M3)** | `pip install onnxruntime-silicon` |
+| **CPU only** | `pip install onnxruntime>=1.17.0` |
+
+> **참고**: `requirements.txt`에는 기본적으로 `onnxruntime-gpu`가 포함되어 있습니다. Apple Silicon 또는 CPU 환경에서는 설치 후 적절한 버전으로 교체하세요.
+
+---
+
+### 방법 A: Runpod GPU 환경 (권장)
+
+> **테스트 환경**: Runpod GPU Pod (A100 PCIe 2x, 63 vCPU, 235GB RAM, runpod-torch-v240 템플릿)
+>
+> Runpod은 Docker 컨테이너 내에서 실행되므로 Docker-in-Docker가 불가능합니다. 따라서 PostgreSQL과 Redis를 직접 설치합니다.
+
+#### 자동 설치 (스크립트 사용)
+
+```bash
+# 레포지토리 클론
+git clone https://github.com/Diffusion-planet/ip-to-portrait.git
+cd ip-to-portrait
+
+# 전체 설치 스크립트 실행 (프론트엔드 + 백엔드)
+bash scripts/setup_all.sh
+```
+
+이 스크립트가 자동으로 수행하는 작업:
+- PostgreSQL, Redis 설치 및 설정
+- Python venv 생성 및 requirements 설치
+- nvm을 통한 Node.js 설치
+- npm 의존성 설치
+- 데이터베이스 마이그레이션
+- .env 파일 생성
+
+#### 설치 후 서비스 시작
+
+```bash
+# 모든 서비스 한 번에 시작
+bash scripts/start_all.sh
+
+# 또는 개별 시작
+bash scripts/start_backend.sh   # 백엔드만
+bash scripts/start_frontend.sh  # 프론트엔드만
+bash scripts/start_celery.sh    # Celery 워커만
+```
+
+#### 실시간 로그 모니터링 (tmux 분할 화면)
+
+모든 서비스의 로그를 실시간으로 동시에 확인하려면 tmux 스크립트를 사용합니다:
+
+```bash
+bash scripts/start_all_tmux.sh
+```
+
+4개의 분할 창이 생성됩니다:
+
+```
++------------+------------+
+|  Backend   |   Celery   |
++------------+------------+
+|   Shell    |  Frontend  |
++------------+------------+
+```
+
+**tmux 단축키:**
+
+| 키 조합 | 동작 |
+|---------|------|
+| `Ctrl+B` → `방향키` | 창 간 이동 |
+| `Ctrl+B` → `D` | 세션 분리 (백그라운드 유지) |
+| `Ctrl+B` → `Z` | 현재 창 전체화면 토글 |
+| `Ctrl+B` → `[` | 스크롤 모드 (q로 종료) |
+
+> **Mac 사용자 참고**: Mac에서 `Ctrl+B` → `방향키` 조합이 작동하지 않는 경우 (창이 사라지는 현상), 다음 대안을 사용하세요:
+>
+> | 키 조합 | 동작 |
+> |---------|------|
+> | `Ctrl+B` → `q` → `숫자` | 창 번호가 표시되면 해당 숫자 입력으로 이동 |
+> | `Ctrl+B` → `o` | 다음 창으로 순환 이동 |
+> | `Ctrl+B` → `;` | 이전 창으로 이동 |
+>
+> **마우스 지원 활성화** (권장):
+> ```bash
+> # 현재 세션에서 마우스 지원 활성화
+> tmux set -g mouse on
+> ```
+> 마우스 지원을 활성화하면 클릭으로 창 선택, 스크롤로 로그 확인이 가능합니다.
+
+**tmux 명령어:**
+
+```bash
+tmux attach -t ip-to-portrait    # 분리된 세션에 다시 연결
+tmux kill-session -t ip-to-portrait  # 세션 종료 (모든 서비스 중단)
+```
+
+#### 다중 GPU 병렬 처리 (A100 2x 등)
+
+여러 GPU가 있는 환경에서 진정한 병렬 처리를 하려면 각 GPU마다 별도의 Celery 워커를 실행해야 합니다.
+
+```bash
+# 자동으로 GPU 개수 감지하여 워커 시작
+bash scripts/start_celery_multi_gpu.sh
+
+# 또는 GPU 개수 직접 지정
+GPU_COUNT=2 bash scripts/start_celery_multi_gpu.sh
+```
+
+**로그 확인:**
+```bash
+# GPU 0 워커 로그
+tail -f /tmp/celery_gpu0.log
+
+# GPU 1 워커 로그
+tail -f /tmp/celery_gpu1.log
+```
+
+**모든 워커 종료:**
+```bash
+pkill -f 'celery -A tasks worker'
+```
+
+> **참고**: 프론트엔드에서 "Parallel" 체크박스를 활성화해야 병렬 처리가 적용됩니다.
+> 단일 워커만 실행 중이면 병렬 체크와 관계없이 순차 처리됩니다.
+
+---
+
+#### Runpod 포트 포워딩 설정
+
+Runpod 대시보드에서 다음 포트를 포워딩해야 합니다:
+- **3008**: 프론트엔드 (Next.js)
+- **8008**: 백엔드 (FastAPI)
+
+Runpod Connect 메뉴에서 "Expose HTTP Ports" 옵션으로 설정하거나, SSH 터널링을 사용하세요.
+
+#### Runpod 재시작 시 venv 재생성
+
+Runpod Pod을 재시작하면 워크스페이스 경로가 변경될 수 있습니다 (예: `/root/...` → `/workspace/...`).
+이 경우 venv의 shebang 경로가 맞지 않아 `bad interpreter` 에러가 발생합니다.
+
+```bash
+# venv 재생성 (경로 변경 시)
+cd /workspace/prometheus/ip-to-portrait
+rm -rf venv
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+# 서비스 재시작
+./scripts/start_all_tmux.sh
+```
+
+---
+
+### 방법 B: 로컬/서버 환경 (Docker 사용)
+
+Docker가 사용 가능한 일반 서버 환경용입니다.
+
+#### 1. 레포지토리 클론
 
 ```bash
 git clone https://github.com/Diffusion-planet/ip-to-portrait.git
 cd ip-to-portrait
 ```
 
-### 2. 가상환경 생성
+#### 2. 가상환경 생성
 
 ```bash
 # 프로젝트 루트에 venv 생성
@@ -255,20 +416,22 @@ source venv/bin/activate
 .\venv\Scripts\activate
 ```
 
-### 3. AI 파이프라인 의존성 설치
+#### 3. AI 파이프라인 의존성 설치
 
 ```bash
 # venv 활성화 상태에서
 pip install -r requirements.txt
 
-# Apple Silicon의 경우 추가 설치:
+# Apple Silicon의 경우:
+pip uninstall onnxruntime-gpu -y
 pip install onnxruntime-silicon
 
-# CUDA 시스템의 경우:
-pip install onnxruntime-gpu
+# CPU만 사용하는 경우:
+pip uninstall onnxruntime-gpu -y
+pip install onnxruntime
 ```
 
-### 4. 환경 변수 설정
+#### 4. 환경 변수 설정
 
 ```bash
 # 예제 파일 복사 후 편집
@@ -279,11 +442,11 @@ cp .env.example .env
 # DATABASE_URL=postgresql+asyncpg://fastface:password@localhost:5433/fastface
 # POSTGRES_PASSWORD=your_secure_password
 # SECRET_KEY=your_jwt_secret_key
-# USE_CELERY=false
+# USE_CELERY=true
 # REDIS_URL=redis://localhost:6379/0
 ```
 
-### 5. Docker 서비스 시작
+#### 5. Docker 서비스 시작
 
 ```bash
 cd web/backend
@@ -295,7 +458,7 @@ docker-compose up -d postgres redis
 docker-compose ps
 ```
 
-### 6. 데이터베이스 초기화
+#### 6. 데이터베이스 초기화
 
 ```bash
 cd web/backend
@@ -304,16 +467,7 @@ cd web/backend
 alembic upgrade head
 ```
 
-### 7. 백엔드 의존성 설치
-
-```bash
-cd web/backend
-
-# venv 활성화 상태에서
-pip install -r requirements.txt
-```
-
-### 8. 프론트엔드 의존성 설치
+#### 7. 프론트엔드 의존성 설치
 
 ```bash
 cd web/frontend
@@ -322,7 +476,7 @@ cd web/frontend
 npm install
 ```
 
-### 9. 애플리케이션 실행
+#### 8. 애플리케이션 실행
 
 **터미널 1 - 백엔드:**
 
@@ -341,7 +495,7 @@ npm run dev
 # 앱이 http://localhost:3008 에서 실행됨
 ```
 
-**선택사항 - Celery Worker (병렬 GPU 처리용):**
+**터미널 3 - Celery Worker (병렬 GPU 처리용):**
 
 ```bash
 cd web/backend
@@ -349,7 +503,9 @@ source ../../venv/bin/activate
 celery -A tasks worker --loglevel=info -Q gpu_queue --concurrency=1
 ```
 
-### Docker 서비스 구성
+---
+
+### Docker 서비스 구성 (방법 B 전용)
 
 `web/backend/`의 `docker-compose.yml`이 제공하는 서비스:
 
@@ -364,6 +520,38 @@ celery -A tasks worker --loglevel=info -Q gpu_queue --concurrency=1
 ```bash
 docker-compose up -d --scale celery-worker=4
 ```
+
+---
+
+### 첫 실행 시 모델 다운로드
+
+처음 생성을 실행하면 HuggingFace에서 필요한 모델들이 자동으로 다운로드됩니다.
+
+| 모델 | 크기 | 다운로드 위치 |
+|------|------|---------------|
+| SDXL Inpainting | ~6GB | `~/.cache/huggingface/` |
+| IP-Adapter FaceID Plus v2 | ~100MB | `~/.cache/huggingface/` |
+| CLIP ViT-H/14 | ~2GB | `~/.cache/huggingface/` |
+| InsightFace (antelopev2) | ~300MB | `~/.insightface/models/` |
+| BiSeNet | ~50MB | 프로젝트 내 자동 다운로드 |
+
+> **참고**: 첫 생성 시 모델 다운로드로 인해 시간이 걸릴 수 있습니다. 이후 실행에서는 캐시된 모델을 사용합니다.
+
+---
+
+### 트러블슈팅
+
+| 문제 | 원인 | 해결 방법 |
+|------|------|-----------|
+| `bad interpreter: no such file` | 프로젝트 경로 변경 후 venv 경로 불일치 | venv 삭제 후 재생성: `rm -rf venv && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt` |
+| `Connection refused` (PostgreSQL) | PostgreSQL 서비스 미실행 | `service postgresql start` |
+| `Connection refused` (Redis) | Redis 서비스 미실행 | `redis-server --daemonize yes` |
+| `CUDA out of memory` | GPU 메모리 부족 | 배치 크기(count) 줄이기, 다른 GPU 프로세스 종료 |
+| `Port 8008/3008 already in use` | 이전 프로세스가 종료되지 않음 | `lsof -i :8008`로 PID 확인 후 `kill <PID>` |
+| `Model download failed` | HuggingFace 네트워크 오류 | 재시도 또는 VPN 사용, `HF_ENDPOINT` 환경변수로 미러 설정 |
+| `BiSeNet 79999_iter.pth 404` | GitHub releases 링크 삭제됨 | 자동으로 Google Drive에서 다운로드 시도 (gdown 사용). 수동: `gdown 154JgKpzCPW82qINcVieuPH3fZ2e0P812 -O models_cache/79999_iter.pth` |
+| `google-genai 패키지 없음` | Gemini 자동 프롬프트 미작동 | `./venv/bin/pip install google-genai` |
+| `asyncpg.exceptions` | DB 연결 정보 불일치 | `.env` 파일의 `DATABASE_URL`과 PostgreSQL 설정 확인 |
 
 ---
 

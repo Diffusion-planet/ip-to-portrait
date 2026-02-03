@@ -44,8 +44,8 @@ def generate_prompt_from_face_image(face_image_path: str) -> str:
     try:
         from google import genai
         from PIL import Image
-    except ImportError:
-        print("   google-genai 패키지가 없습니다. 기본 프롬프트를 사용합니다.")
+    except ImportError as e:
+        print(f"   google-genai 패키지가 없습니다. 기본 프롬프트를 사용합니다. (Error: {e})")
         return DEFAULT_PROMPT
 
     # API 키 로드

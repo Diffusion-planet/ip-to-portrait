@@ -1452,13 +1452,13 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
     command = ' '.join(sys.argv)
 
     # 출력 경로 (폴더 내 result.png)
-    output_path = os.path.join(run_folder, "5_result.png")
+    internal_output_path = os.path.join(run_folder, "5_result.png")
 
     result = compositor.composite_face_auto(
         background_path=background_path,
         source_face_path=face_path,
         prompt=final_prompt,
-        output_path=output_path,
+        output_path=internal_output_path,
         face_strength=args.face_strength,
         denoising_strength=args.denoising,
         num_inference_steps=args.steps,

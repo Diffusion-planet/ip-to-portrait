@@ -19,6 +19,7 @@ from core.config import settings
 PIPELINE_DIR = Path(__file__).parent.parent.parent.parent
 PIPELINE_SCRIPT = PIPELINE_DIR / "inpainting-pipeline.py"
 DEFAULT_BACKGROUND = PIPELINE_DIR / "inputs" / "background.png"
+VENV_PYTHON = PIPELINE_DIR / "venv" / "bin" / "python"  # Use venv Python for packages
 
 
 class PipelineService:
@@ -283,17 +284,20 @@ class PipelineService:
                     progress = meta.get('progress', 0)
                     current_step = meta.get('current_step', 0)
                     message = meta.get('message', 'Processing...')
+                    preview_url = meta.get('preview_url')
 
                     task_manager.update_task(
                         task_id,
                         progress=progress,
                         current_step=current_step,
+                        preview_url=preview_url,
                     )
 
                     await self._send_progress(
                         task_id, batch_id, TaskStatus.PROCESSING, progress,
                         current_step=current_step,
                         total_steps=total_steps,
+                        preview_url=preview_url,
                         message=message
                     )
 
@@ -394,9 +398,9 @@ class PipelineService:
         output_filename = f"{batch_id}_{output_index}.png"
         output_path = self.output_dir / output_filename
 
-        # Build command
+        # Build command (use venv Python for package access)
         cmd = [
-            "python",
+            str(VENV_PYTHON),
             "-u",  # Unbuffered output for real-time logging
             str(PIPELINE_SCRIPT),
             str(background_path),

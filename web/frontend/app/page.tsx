@@ -239,6 +239,31 @@ function HomePageContent() {
     localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify(trimmed))
   }
 
+  // Verify token on mount - check if token is still valid
+  useEffect(() => {
+    const verifyToken = async () => {
+      const token = getAuthToken()
+      if (!token) return
+
+      try {
+        const response = await fetch('http://localhost:8008/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        })
+        if (!response.ok) {
+          // Token invalid - clear localStorage
+          localStorage.removeItem('token')
+          localStorage.removeItem('user')
+          console.log('Invalid token cleared')
+        }
+      } catch (error) {
+        console.error('Token verification failed:', error)
+      }
+    }
+    verifyToken()
+  }, [])
+
   // Fetch history on mount
   useEffect(() => {
     const fetchHistory = async () => {
@@ -452,6 +477,7 @@ function HomePageContent() {
       count,
       parallel,
       title: projectTitle !== 'Face Inpainting Pipeline' ? projectTitle : undefined,
+      client_id: clientId,  // Auto-subscribe on server side for faster WebSocket
     })
 
     if (response) {
@@ -536,8 +562,8 @@ function HomePageContent() {
         stopAt: item.params.stop_at || DEFAULT_PARAMS.stopAt,
         faceBlendWeight: item.params.face_blend_weight || DEFAULT_PARAMS.faceBlendWeight,
         hairBlendWeight: item.params.hair_blend_weight || DEFAULT_PARAMS.hairBlendWeight,
+        autoPrompt: item.params.auto_prompt ?? DEFAULT_PARAMS.autoPrompt,
       })
-      setAutoPrompt(item.params.auto_prompt || false)
     }
 
     // Restore generation control settings

@@ -52,6 +52,7 @@ class GenerationRequest(BaseModel):
     count: int = Field(default=4, ge=1, le=8, description="Number of images to generate")
     parallel: bool = Field(default=False, description="Run generations in parallel")
     title: Optional[str] = Field(None, description="Custom title for history")
+    client_id: Optional[str] = Field(None, description="WebSocket client ID for auto-subscribe")
 
 
 class GenerationTask(BaseModel):

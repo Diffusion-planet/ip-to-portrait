@@ -1,32 +1,86 @@
-# Inpainting Pipeline Requirements
-# Python 3.10, 3.11, 3.12 supported
-# Tested: 2026-01
+# =============================================================================
+# IP-to-Portrait Requirements
+# Python 3.10, 3.11, 3.12 supported | Tested: 2026-01
+# =============================================================================
 
-# PyTorch (MPS/CUDA/CPU)
-# 2.8.0 recommended for stability, 2.9.1 is latest but has macOS 26 issues
+# -----------------------------------------------------------------------------
+# PyTorch & Deep Learning Core
+# -----------------------------------------------------------------------------
 torch>=2.8.0,<2.10.0
-torchvision>=0.18.0,<0.20.0
+torchvision>=0.23.0,<0.25.0
 
-# Diffusers (latest stable)
+# -----------------------------------------------------------------------------
+# Diffusers & Transformers (Stable Diffusion)
+# -----------------------------------------------------------------------------
 diffusers>=0.35.0,<0.37.0
 transformers>=4.40.0,<5.0.0
 accelerate>=0.30.0,<1.0.0
 safetensors>=0.4.0
 
-# Image processing
+# -----------------------------------------------------------------------------
+# Image Processing
+# -----------------------------------------------------------------------------
 pillow>=10.0.0
 numpy>=1.24.0,<2.0.0
 opencv-python>=4.8.0
-scipy>=1.10.0  # For BiSeNet morphological operations
+scipy>=1.10.0
 
-# Face detection (native M1/M2/M3 support from 0.10.0+)
+# -----------------------------------------------------------------------------
+# Face Detection & Recognition
+# -----------------------------------------------------------------------------
 mediapipe>=0.10.14,<0.11.0
+insightface>=0.7.3
 
-# Hugging Face
+# ONNX Runtime - Choose ONE based on your hardware:
+# - CUDA GPU:      pip install onnxruntime-gpu>=1.17.0
+# - Apple Silicon: pip install onnxruntime-silicon
+# - CPU only:      pip install onnxruntime>=1.17.0
+# Default: GPU version (uncomment appropriate one if needed)
+onnxruntime-gpu>=1.17.0
+
+# -----------------------------------------------------------------------------
+# Hugging Face Hub
+# -----------------------------------------------------------------------------
 huggingface-hub>=0.23.0
 
-# FaceID mode (optional - for IP-Adapter FaceID Plus v2)
-# Install: pip install insightface onnxruntime
-# For Apple Silicon: pip install insightface onnxruntime-silicon
-insightface>=0.7.3
-onnxruntime>=1.17.0  # For CPU/CUDA; use onnxruntime-silicon for Apple Silicon
+# -----------------------------------------------------------------------------
+# File Download Utilities
+# -----------------------------------------------------------------------------
+gdown>=5.0.0
+
+# -----------------------------------------------------------------------------
+# AI API (Gemini for auto prompt generation)
+# -----------------------------------------------------------------------------
+google-generativeai>=0.3.0
+google-genai>=1.0.0
+
+# -----------------------------------------------------------------------------
+# Web Framework (FastAPI)
+# -----------------------------------------------------------------------------
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+websockets>=12.0
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+aiofiles>=23.2.1
+
+# -----------------------------------------------------------------------------
+# Database (PostgreSQL + SQLAlchemy)
+# -----------------------------------------------------------------------------
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.13.0
+
+# -----------------------------------------------------------------------------
+# Authentication (JWT + Password Hashing)
+# -----------------------------------------------------------------------------
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+email-validator>=2.0.0
+
+# -----------------------------------------------------------------------------
+# Task Queue (Celery + Redis)
+# -----------------------------------------------------------------------------
+celery[redis]>=5.3.0
+redis>=5.0.0

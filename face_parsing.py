@@ -179,20 +179,33 @@ class FaceParser:
         """Download BiSeNet model with fallback URLs."""
         import urllib.request
 
-        urls = [
-            "https://github.com/zllrunning/face-parsing.PyTorch/releases/download/v1.0/79999_iter.pth",
-            # Hugging Face mirror
-            "https://huggingface.co/jonathandinu/face-parsing/resolve/main/79999_iter.pth",
-        ]
-
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        # Method 1: Try gdown for Google Drive (most reliable)
+        try:
+            import gdown
+            gdrive_id = "154JgKpzCPW82qINcVieuPH3fZ2e0P812"
+            print(f"Trying to download from Google Drive (ID: {gdrive_id})...")
+            gdown.download(id=gdrive_id, output=save_path, quiet=False)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 1000000:  # > 1MB
+                print(f"Downloaded to: {save_path}")
+                return True
+        except Exception as e:
+            print(f"Google Drive download failed: {e}")
+
+        # Method 2: Fallback to direct URLs
+        urls = [
+            "https://huggingface.co/jonathandinu/face-parsing/resolve/main/79999_iter.pth",
+            "https://github.com/zllrunning/face-parsing.PyTorch/releases/download/v1.0/79999_iter.pth",
+        ]
 
         for url in urls:
             try:
                 print(f"Trying to download from: {url}")
                 urllib.request.urlretrieve(url, save_path)
-                print(f"Downloaded to: {save_path}")
-                return True
+                if os.path.exists(save_path) and os.path.getsize(save_path) > 1000000:
+                    print(f"Downloaded to: {save_path}")
+                    return True
             except Exception as e:
                 print(f"Failed: {e}")
                 continue

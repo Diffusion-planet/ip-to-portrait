@@ -14,6 +14,7 @@ from models import (
 from models.user import User
 from services.pipeline_service import PipelineService
 from services.task_manager import task_manager
+from services.websocket_manager import websocket_manager
 from core.deps import get_current_user_optional
 
 router = APIRouter()
@@ -30,6 +31,11 @@ async def start_generation(
 
     # Create batch ID
     batch_id = str(uuid.uuid4())
+
+    # Auto-subscribe client to batch BEFORE starting generation
+    # This ensures WebSocket updates are received even if Celery is fast
+    if request.client_id:
+        websocket_manager.subscribe_to_batch(request.client_id, batch_id)
 
     # Create tasks for each generation
     tasks: List[GenerationTask] = []

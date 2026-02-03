@@ -128,6 +128,7 @@ export function useGeneration() {
     count?: number
     parallel?: boolean
     title?: string
+    client_id?: string  // WebSocket client ID for auto-subscribe
   }) => {
     return request('/generation/start', {
       method: 'POST',

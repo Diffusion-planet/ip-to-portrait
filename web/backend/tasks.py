@@ -18,6 +18,7 @@ PIPELINE_DIR = BACKEND_DIR.parent.parent
 PIPELINE_SCRIPT = PIPELINE_DIR / "inpainting-pipeline.py"
 OUTPUT_DIR = BACKEND_DIR / "outputs"
 UPLOAD_DIR = BACKEND_DIR / "uploads"
+VENV_PYTHON = PIPELINE_DIR / "venv" / "bin" / "python"  # Use venv Python for packages
 
 
 def find_image_path(base_dir: Path, image_id: str) -> Optional[Path]:
@@ -91,9 +92,9 @@ def generate_image(
         if seed < 0:
             seed = random.randint(0, 2147483647)
 
-        # Build command
+        # Build command (use venv Python for package access)
         cmd = [
-            "python",
+            str(VENV_PYTHON),
             "-u",
             str(PIPELINE_SCRIPT),
             str(background_path),
@@ -165,6 +166,7 @@ def generate_image(
         generated_prompt = None
         current_step = 0
         total_steps = params.get('steps', 50)
+        preview_url = None
 
         # Process output in real-time
         for line in process.stdout:
@@ -173,6 +175,21 @@ def generate_image(
                 continue
 
             print(f"[Celery Worker {task_id}] {line}")
+
+            # Parse preview image path
+            if line.startswith("PREVIEW:"):
+                preview_abs_path = line.replace("PREVIEW:", "").strip()
+                try:
+                    preview_path = Path(preview_abs_path)
+                    # Convert to URL relative to outputs
+                    if OUTPUT_DIR in preview_path.parents or preview_path.parent == OUTPUT_DIR:
+                        relative_path = preview_path.relative_to(OUTPUT_DIR)
+                        preview_url = f"/outputs/{relative_path.as_posix()}"
+                    else:
+                        # Try to find relative to backend outputs
+                        preview_url = f"/outputs/{preview_path.name}"
+                except Exception as e:
+                    print(f"[Celery Worker {task_id}] Preview path error: {e}")
 
             # Parse progress
             if "Step" in line and "/" in line:
@@ -188,14 +205,15 @@ def generate_image(
                             'progress': progress,
                             'current_step': current_step,
                             'total_steps': total_steps,
-                            'message': f'Step {current_step}/{total_steps}'
+                            'message': f'Step {current_step}/{total_steps}',
+                            'preview_url': preview_url,
                         }
                     )
                 except (IndexError, ValueError):
                     pass
 
             # Capture generated prompt
-            if "Generated prompt:" in line or "Auto-generated prompt:" in line:
+            if "Generated prompt:" in line or "Auto-generated prompt:" in line or "GENERATED_PROMPT:" in line:
                 generated_prompt = line.split(":", 1)[1].strip() if ":" in line else None
 
         process.wait()
@@ -207,7 +225,11 @@ def generate_image(
                 'task_id': task_id,
             }
 
-        # Check result
+        # Check result - pipeline creates subfolder with timestamp
+        # Output structure: outputs/{batch_id}_{index}_{timestamp}/5_result.png
+        import shutil
+
+        # First check if direct output exists
         if output_path.exists():
             result_url = f"/outputs/{output_filename}"
             return {
@@ -217,31 +239,54 @@ def generate_image(
                 'generated_prompt': generated_prompt,
                 'current_step': current_step or total_steps,
             }
-        else:
-            # Try to find in recent outputs folder
-            outputs_dir = PIPELINE_DIR / "outputs"
-            if outputs_dir.exists():
-                folders = sorted(outputs_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True)
-                for folder in folders[:3]:
-                    if folder.is_dir():
-                        png_files = list(folder.glob("*.png"))
-                        if png_files:
-                            import shutil
-                            shutil.copy(png_files[0], output_path)
-                            result_url = f"/outputs/{output_filename}"
-                            return {
-                                'status': 'completed',
-                                'result_url': result_url,
-                                'task_id': task_id,
-                                'generated_prompt': generated_prompt,
-                                'current_step': current_step or total_steps,
-                            }
 
-            return {
-                'status': 'failed',
-                'error': 'No output file generated',
-                'task_id': task_id,
-            }
+        # Look for output in subfolder (pipeline creates: {base_name}_{timestamp}/)
+        output_base = output_path.stem  # e.g., "batch_id_1"
+        matching_folders = sorted(
+            [f for f in OUTPUT_DIR.iterdir() if f.is_dir() and f.name.startswith(output_base)],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+
+        for folder in matching_folders[:1]:  # Check most recent matching folder
+            result_file = folder / "5_result.png"
+            if result_file.exists():
+                # Copy to expected location for consistent URL
+                shutil.copy(result_file, output_path)
+                result_url = f"/outputs/{output_filename}"
+                return {
+                    'status': 'completed',
+                    'result_url': result_url,
+                    'task_id': task_id,
+                    'generated_prompt': generated_prompt,
+                    'current_step': current_step or total_steps,
+                }
+
+        # Fallback: check any recent output folders
+        if OUTPUT_DIR.exists():
+            folders = sorted(
+                [f for f in OUTPUT_DIR.iterdir() if f.is_dir()],
+                key=lambda x: x.stat().st_mtime,
+                reverse=True
+            )
+            for folder in folders[:3]:
+                result_file = folder / "5_result.png"
+                if result_file.exists():
+                    shutil.copy(result_file, output_path)
+                    result_url = f"/outputs/{output_filename}"
+                    return {
+                        'status': 'completed',
+                        'result_url': result_url,
+                        'task_id': task_id,
+                        'generated_prompt': generated_prompt,
+                        'current_step': current_step or total_steps,
+                    }
+
+        return {
+            'status': 'failed',
+            'error': 'No output file generated',
+            'task_id': task_id,
+        }
 
     except Exception as e:
         print(f"[Celery Worker] Task {task_id} failed: {str(e)}")

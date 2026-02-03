@@ -21,6 +21,9 @@ models_cache/
 # Environment variables
 .env
 
+# Virtual environment
+venv/
+
 # macOS
 .DS_Store
 
@@ -38,3 +41,6 @@ node_modules/
 # IDE
 .idea/
 .vscode/
+
+# Claude extension settings
+.claude/
