@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     # Preload models for faster generation
-    # print("🚀 Preloading models...")
-    # warmup_pipeline()
+    print("🚀 Preloading models...")
+    warmup_pipeline()
 
     yield
     # Shutdown

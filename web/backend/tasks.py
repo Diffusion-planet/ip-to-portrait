@@ -161,12 +161,14 @@ def generate_image(
             env=env,
             text=True,
             bufsize=1,
+            cwd=str(PIPELINE_DIR),  # Run in pipeline directory so face_id.py can be imported
         )
 
         generated_prompt = None
         current_step = 0
         total_steps = params.get('steps', 50)
         preview_url = None
+        progress = 0  # Initialize progress
 
         # Process output in real-time
         for line in process.stdout:
@@ -188,6 +190,20 @@ def generate_image(
                     else:
                         # Try to find relative to backend outputs
                         preview_url = f"/outputs/{preview_path.name}"
+
+                    # Immediately update state with preview
+                    self.update_state(
+                        state='PROCESSING',
+                        meta={
+                            'task_id': task_id,
+                            'progress': progress,
+                            'current_step': current_step,
+                            'total_steps': total_steps,
+                            'preview_url': preview_url,
+                            'message': f'Preview available',
+                        }
+                    )
+                    print(f"[Celery Worker {task_id}] Preview URL: {preview_url}")
                 except Exception as e:
                     print(f"[Celery Worker {task_id}] Preview path error: {e}")
 
@@ -215,6 +231,17 @@ def generate_image(
             # Capture generated prompt
             if "Generated prompt:" in line or "Auto-generated prompt:" in line or "GENERATED_PROMPT:" in line:
                 generated_prompt = line.split(":", 1)[1].strip() if ":" in line else None
+                # Update task state with generated prompt so backend can broadcast it
+                if generated_prompt:
+                    self.update_state(
+                        state='PROCESSING',
+                        meta={
+                            'task_id': task_id,
+                            'progress': progress or 0,
+                            'message': 'Generated prompt',
+                            'generated_prompt': generated_prompt,
+                        }
+                    )
 
         process.wait()
 

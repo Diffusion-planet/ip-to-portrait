@@ -187,13 +187,19 @@ except ImportError:
 
 # FaceID module (optional, for better identity preservation)
 try:
+    print("[DEBUG inpainting-pipeline.py] Attempting to import face_id module...")
+    print(f"[DEBUG inpainting-pipeline.py] sys.path: {__import__('sys').path[:3]}")
+    print(f"[DEBUG inpainting-pipeline.py] __file__: {__file__}")
     from face_id import FaceIDExtractor, FaceIDIPAdapter, check_insightface_available
+    print("[DEBUG inpainting-pipeline.py] ✅ face_id module imported successfully!")
     HAS_FACEID = check_insightface_available()
+    print(f"[DEBUG inpainting-pipeline.py] check_insightface_available() = {HAS_FACEID}")
     if not HAS_FACEID:
         print("InsightFace not installed. FaceID mode unavailable.")
         print("Install: pip install insightface onnxruntime")
-except ImportError:
+except ImportError as e:
     HAS_FACEID = False
+    print(f"[DEBUG inpainting-pipeline.py] ❌ face_id import failed: {e}")
     print("face_id.py not found. FaceID mode unavailable.")
 
 # Gemini Vision 프롬프트 생성기 (optional)
@@ -239,16 +245,19 @@ class AutoIDPhotoCompositor:
 
         # 모드 설정
         # Dual adapter requires both FaceID and CLIP
+        print(f"[DEBUG __init__] HAS_FACEID = {HAS_FACEID}")
+        print(f"[DEBUG __init__] use_faceid_plus argument = {use_faceid_plus}")
         self.use_dual_adapter = use_dual_adapter and HAS_FACEID
         self.use_faceid = (use_faceid or use_dual_adapter or use_faceid_plus) and HAS_FACEID
         self.use_faceid_plus = use_faceid_plus and HAS_FACEID  # FaceID Plus v2 (얼굴+머리스타일)
         self.use_clip_blend = use_clip_blend  # CLIP Blending mode
+        print(f"[DEBUG __init__] self.use_faceid_plus = {self.use_faceid_plus}")
 
-        if use_clip_blend:
+        if self.use_clip_blend:
             self.ip_adapter_mode = "clip_blend"  # CLIP embedding blending
-        elif use_faceid_plus:
+        elif self.use_faceid_plus:
             self.ip_adapter_mode = "faceid_plus"  # FaceID Plus v2 (InsightFace + CLIP)
-        elif use_dual_adapter:
+        elif self.use_dual_adapter:
             self.ip_adapter_mode = "dual"  # FaceID + CLIP
         elif self.use_faceid:
             self.ip_adapter_mode = "faceid"

@@ -286,13 +286,23 @@ class PipelineService:
                     current_step = meta.get('current_step', 0)
                     message = meta.get('message', 'Processing...')
                     preview_url = meta.get('preview_url')
+                    generated_prompt = meta.get('generated_prompt')
 
                     task_manager.update_task(
                         task_id,
                         progress=progress,
                         current_step=current_step,
                         preview_url=preview_url,
+                        generated_prompt=generated_prompt,
                     )
+
+                    # Send generated prompt via WebSocket if available
+                    if generated_prompt:
+                        prompt_message = WebSocketMessage(
+                            type="generated_prompt",
+                            data={"prompt": generated_prompt}
+                        )
+                        await websocket_manager.broadcast_to_batch(batch_id, prompt_message)
 
                     await self._send_progress(
                         task_id, batch_id, TaskStatus.PROCESSING, progress,
@@ -394,20 +404,13 @@ class PipelineService:
         seed: int,
         output_index: int,
     ) -> Optional[Path]:
-        """Execute the inpainting pipeline - try preloaded model first, fallback to subprocess"""
+        """Execute the inpainting pipeline - use subprocess for preview support"""
 
         output_filename = f"{batch_id}_{output_index}.png"
         output_path = self.output_dir / output_filename
 
-        # Try preloaded pipeline first
-        pipeline = get_pipeline()
-        if pipeline is not None:
-            return await self._execute_pipeline_direct(
-                pipeline, task_id, batch_id, face_image_path, background_path,
-                params, seed, output_index, output_path
-            )
-
-        # Fallback to subprocess if no preloaded pipeline
+        # Always use subprocess for consistent preview support
+        # (Preloaded pipeline can't capture stdout for previews)
         return await self._execute_pipeline_subprocess(
             task_id, batch_id, face_image_path, background_path,
             params, seed, output_index, output_path
@@ -428,6 +431,29 @@ class PipelineService:
         """Execute pipeline directly using preloaded model"""
 
         try:
+            # Handle auto-prompt if requested
+            final_prompt = params.prompt or "professional portrait, natural expression"
+            generated_prompt = None
+
+            if params.auto_prompt or not params.prompt:
+                try:
+                    from prompt_generator import generate_prompt_from_face_image
+                    print(f"[Pipeline Direct] Generating prompt for {face_image_path}...")
+                    generated_prompt = generate_prompt_from_face_image(str(face_image_path))
+                    final_prompt = generated_prompt
+                    print(f"[Pipeline Direct] Generated prompt: {generated_prompt}")
+
+                    # Send to WebSocket
+                    task_manager.update_task(task_id, generated_prompt=generated_prompt)
+                    message = WebSocketMessage(
+                        type="generated_prompt",
+                        data={"prompt": generated_prompt}
+                    )
+                    await websocket_manager.broadcast_to_batch(batch_id, message)
+                except Exception as e:
+                    print(f"[Pipeline Direct] Failed to generate prompt: {e}")
+                    # Continue with default prompt
+
             # Run in thread pool to avoid blocking
             import concurrent.futures
             from PIL import Image
@@ -436,7 +462,7 @@ class PipelineService:
                 result = pipeline.composite_face_auto(
                     background_path=str(background_path),
                     source_face_path=str(face_image_path),
-                    prompt=params.prompt or "professional portrait, natural expression",
+                    prompt=final_prompt,
                     output_path=str(output_path),
                     face_strength=params.face_strength,
                     denoising_strength=params.denoise_strength,
@@ -641,6 +667,7 @@ class PipelineService:
         if not output_path.exists():
             if self.output_dir.exists():
                 # Find folders matching this batch output name
+                output_filename = output_path.name
                 output_name_prefix = output_filename.rsplit('.', 1)[0]  # Remove .png extension
                 matching_folders = [
                     f for f in self.output_dir.iterdir()

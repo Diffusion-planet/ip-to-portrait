@@ -21,6 +21,13 @@ def get_pipeline():
     if _pipeline is None:
         try:
             print("🔄 Loading models into memory (this may take a minute)...")
+            print(f"[DEBUG pipeline_loader] PIPELINE_DIR: {PIPELINE_DIR}")
+            print(f"[DEBUG pipeline_loader] sys.path before: {sys.path[:3]}")
+
+            # Add PIPELINE_DIR to sys.path so face_id.py can be imported
+            if str(PIPELINE_DIR) not in sys.path:
+                sys.path.insert(0, str(PIPELINE_DIR))
+                print(f"[DEBUG pipeline_loader] ✅ Added {PIPELINE_DIR} to sys.path")
 
             # Import inpainting-pipeline.py using importlib
             spec = importlib.util.spec_from_file_location("inpainting_pipeline", PIPELINE_SCRIPT)

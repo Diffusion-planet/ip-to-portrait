@@ -19,10 +19,13 @@ from typing import Optional, Tuple, Union
 
 # InsightFace is optional
 try:
+    print("[DEBUG face_id.py] Attempting to import insightface...")
     from insightface.app import FaceAnalysis
     HAS_INSIGHTFACE = True
-except ImportError:
+    print("[DEBUG face_id.py] ✅ InsightFace imported successfully!")
+except ImportError as e:
     HAS_INSIGHTFACE = False
+    print(f"[DEBUG face_id.py] ❌ InsightFace import failed: {e}")
     print("insightface not installed. FaceID mode unavailable.")
     print("Install: pip install insightface onnxruntime")
 
