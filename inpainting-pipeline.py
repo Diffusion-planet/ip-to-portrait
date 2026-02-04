@@ -173,6 +173,11 @@ def save_run_params(run_folder: str, args, command: str, actual_seed: int,
             reproduce_cmd += f" --stop-at {args.stop_at}"
         if args.auto_prompt:
             reproduce_cmd += " --auto-prompt"
+        if hasattr(args, 'use_pre_paste') and args.use_pre_paste:
+            reproduce_cmd += " --use-pre-paste"
+            reproduce_cmd += f" --pre-paste-denoising {args.pre_paste_denoising}"
+        if hasattr(args, 'use_face_swap') and args.use_face_swap:
+            reproduce_cmd += " --use-face-swap"
 
         f.write(f"{reproduce_cmd}\n")
 
@@ -191,15 +196,17 @@ try:
     print("[DEBUG inpainting-pipeline.py] Attempting to import face_id module...")
     print(f"[DEBUG inpainting-pipeline.py] sys.path: {__import__('sys').path[:3]}")
     print(f"[DEBUG inpainting-pipeline.py] __file__: {__file__}")
-    from face_id import FaceIDExtractor, FaceIDIPAdapter, check_insightface_available
+    from face_id import FaceIDExtractor, FaceIDIPAdapter, FaceSwapper, check_insightface_available
     print("[DEBUG inpainting-pipeline.py] ✅ face_id module imported successfully!")
     HAS_FACEID = check_insightface_available()
+    HAS_FACESWAP = HAS_FACEID  # FaceSwap requires InsightFace
     print(f"[DEBUG inpainting-pipeline.py] check_insightface_available() = {HAS_FACEID}")
     if not HAS_FACEID:
         print("InsightFace not installed. FaceID mode unavailable.")
         print("Install: pip install insightface onnxruntime")
 except ImportError as e:
     HAS_FACEID = False
+    HAS_FACESWAP = False
     print(f"[DEBUG inpainting-pipeline.py] ❌ face_id import failed: {e}")
     print("face_id.py not found. FaceID mode unavailable.")
 
@@ -222,10 +229,11 @@ def get_device():
 
 
 class AutoIDPhotoCompositor:
-    """자동 얼굴 감지 + 합성 (머리카락 포함, FaceID 지원, CLIP Blending)"""
+    """자동 얼굴 감지 + 합성 (머리카락 포함, FaceID 지원, CLIP Blending, Pre-paste, FaceSwap)"""
 
     def __init__(self, detection_method='opencv', use_bisenet=True, use_faceid=False,
-                 use_dual_adapter=False, use_clip_blend=False, use_faceid_plus=False):
+                 use_dual_adapter=False, use_clip_blend=False, use_faceid_plus=False,
+                 use_pre_paste=False, use_face_swap=False):
         """
         파이프라인 초기화
 
@@ -235,6 +243,8 @@ class AutoIDPhotoCompositor:
             use_faceid: FaceID 모드 사용 여부 (정체성 보존 향상)
             use_dual_adapter: Dual IP-Adapter 모드 (FaceID + CLIP for hair transfer)
             use_clip_blend: CLIP Blending 모드 (얼굴+머리카락 CLIP 임베딩 블렌딩)
+            use_pre_paste: Pre-paste 모드 (소스 얼굴을 미리 붙여넣기, denoising 낮춤)
+            use_face_swap: Face Swap 모드 (생성 후 InsightFace로 얼굴 교체)
         """
         print("=" * 70)
         print("Inpainting Pipeline v5")
@@ -252,7 +262,11 @@ class AutoIDPhotoCompositor:
         self.use_faceid = (use_faceid or use_dual_adapter or use_faceid_plus) and HAS_FACEID
         self.use_faceid_plus = use_faceid_plus and HAS_FACEID  # FaceID Plus v2 (얼굴+머리스타일)
         self.use_clip_blend = use_clip_blend  # CLIP Blending mode
+        self.use_pre_paste = use_pre_paste  # Pre-paste mode (소스 얼굴 미리 붙여넣기)
+        self.use_face_swap = use_face_swap and HAS_FACESWAP  # Face Swap mode (생성 후 얼굴 교체)
         print(f"[DEBUG __init__] self.use_faceid_plus = {self.use_faceid_plus}")
+        print(f"[DEBUG __init__] self.use_pre_paste = {self.use_pre_paste}")
+        print(f"[DEBUG __init__] self.use_face_swap = {self.use_face_swap}")
 
         if self.use_clip_blend:
             self.ip_adapter_mode = "clip_blend"  # CLIP embedding blending
@@ -295,13 +309,27 @@ class AutoIDPhotoCompositor:
                 self.use_faceid = False
                 self.ip_adapter_mode = "standard"
 
+        # FaceSwapper 초기화 (생성 후 얼굴 교체용)
+        self.face_swapper = None
+        if self.use_face_swap:
+            try:
+                self.face_swapper = FaceSwapper(device=self.device)
+                if self.face_swapper.load():
+                    print("FaceSwapper 준비 완료 (inswapper_128)")
+                else:
+                    print("FaceSwapper 로딩 실패, Face Swap 비활성화")
+                    self.use_face_swap = False
+            except Exception as e:
+                print(f"FaceSwapper 초기화 실패: {e}")
+                self.use_face_swap = False
+
         # dtype 설정 (CPU는 float32 사용)
         self.dtype = torch.float32 if self.device == "cpu" else torch.float16
 
         # Inpainting 파이프라인
-        print("\nSDXL Inpainting 모델 로딩 중...")
+        print("\nRealVisXL V4.0 Inpainting 모델 로딩 중...")
         self.pipeline = AutoPipelineForInpainting.from_pretrained(
-            "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+            "OzzyGT/RealVisXL_V4.0_inpainting",
             torch_dtype=self.dtype,
             variant="fp16" if self.dtype == torch.float16 else None
         )
@@ -350,6 +378,17 @@ class AutoIDPhotoCompositor:
             print("  - Standard IP-Adapter")
             print("  - CLIP 임베딩만 사용")
             print("  - 정체성 보존 제한적")
+
+        # 추가 모드 정보
+        if self.use_pre_paste:
+            print("\n📋 Pre-paste 모드 활성화")
+            print("  - 소스 얼굴을 배경에 미리 붙여넣기")
+            print("  - Denoising strength 자동 조정 (~0.65)")
+            print("  - 얼굴 위치/크기 더 정확하게 유지")
+        if self.use_face_swap:
+            print("\n🔄 Face Swap 모드 활성화")
+            print("  - 생성 후 InsightFace inswapper 적용")
+            print("  - 얼굴 유사도 향상")
         print("=" * 70)
 
     def _load_ip_adapter(self) -> bool:
@@ -517,6 +556,176 @@ class AutoIDPhotoCompositor:
     def get_current_mode(self) -> str:
         """현재 IP-Adapter 모드 반환"""
         return self.ip_adapter_mode
+
+    def _pre_paste_face(
+        self,
+        background_img: Image.Image,
+        source_face_img: Image.Image,
+        target_bbox: tuple = None,
+        blend_mode: str = "seamless"
+    ) -> Image.Image:
+        """
+        소스 얼굴을 배경 이미지에 미리 붙여넣기 (Pre-paste)
+
+        Inpainting 전에 소스 얼굴을 배경의 얼굴 위치에 미리 붙여넣어서
+        얼굴 위치와 크기를 더 정확하게 유지합니다.
+
+        Args:
+            background_img: 배경 이미지 (PIL Image)
+            source_face_img: 소스 얼굴 이미지 (PIL Image)
+            target_bbox: 타겟 얼굴 영역 (x1, y1, x2, y2), None이면 자동 감지
+            blend_mode: 블렌딩 모드 ("seamless", "alpha", "direct")
+
+        Returns:
+            소스 얼굴이 붙여넣어진 이미지 (PIL Image)
+        """
+        print("\n📋 Pre-paste: 소스 얼굴 미리 붙여넣기...")
+
+        bg_array = np.array(background_img)
+        src_array = np.array(source_face_img)
+
+        # 배경에서 타겟 얼굴 위치 감지
+        if target_bbox is None:
+            bg_bgr = bg_array[:, :, ::-1]
+            if self.face_cascade is not None:
+                gray = cv2.cvtColor(bg_bgr, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+                if len(faces) > 0:
+                    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+                    # 얼굴 영역 확장 (머리카락 포함)
+                    expand = 0.5
+                    x1 = max(0, int(x - w * expand))
+                    y1 = max(0, int(y - h * expand * 1.2))  # 위쪽 더 확장 (이마/머리)
+                    x2 = min(bg_array.shape[1], int(x + w + w * expand))
+                    y2 = min(bg_array.shape[0], int(y + h + h * expand * 0.5))
+                    target_bbox = (x1, y1, x2, y2)
+                    print(f"   타겟 얼굴 영역: {target_bbox}")
+
+        if target_bbox is None:
+            print("   ⚠️ 배경에서 얼굴을 찾지 못했습니다. Pre-paste 건너뜀.")
+            return background_img
+
+        x1, y1, x2, y2 = target_bbox
+        target_w = x2 - x1
+        target_h = y2 - y1
+
+        # 소스 얼굴에서 얼굴 영역 감지
+        src_bgr = src_array[:, :, ::-1]
+        src_bbox = None
+        if self.face_cascade is not None:
+            gray = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+            if len(faces) > 0:
+                sx, sy, sw, sh = max(faces, key=lambda f: f[2] * f[3])
+                # 얼굴 영역 확장
+                expand = 0.4
+                sx1 = max(0, int(sx - sw * expand))
+                sy1 = max(0, int(sy - sh * expand * 1.0))
+                sx2 = min(src_array.shape[1], int(sx + sw + sw * expand))
+                sy2 = min(src_array.shape[0], int(sy + sh + sh * expand * 0.3))
+                src_bbox = (sx1, sy1, sx2, sy2)
+
+        # 소스 얼굴 크롭 및 리사이즈
+        if src_bbox:
+            sx1, sy1, sx2, sy2 = src_bbox
+            src_cropped = src_array[sy1:sy2, sx1:sx2]
+        else:
+            src_cropped = src_array
+
+        # 타겟 크기에 맞게 리사이즈
+        src_resized = cv2.resize(src_cropped, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
+
+        # 블렌딩
+        result = bg_array.copy()
+
+        if blend_mode == "seamless":
+            # OpenCV seamlessClone 사용
+            try:
+                # 마스크 생성 (타원형)
+                mask = np.zeros((target_h, target_w), dtype=np.uint8)
+                center = (target_w // 2, target_h // 2)
+                axes = (int(target_w * 0.45), int(target_h * 0.48))
+                cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+                mask = cv2.GaussianBlur(mask, (21, 21), 0)
+
+                # seamlessClone center 계산
+                clone_center = (x1 + target_w // 2, y1 + target_h // 2)
+
+                # BGR 변환
+                result_bgr = result[:, :, ::-1].copy()
+                src_resized_bgr = src_resized[:, :, ::-1]
+
+                # Seamless clone
+                result_bgr = cv2.seamlessClone(
+                    src_resized_bgr, result_bgr, mask,
+                    clone_center, cv2.NORMAL_CLONE
+                )
+                result = result_bgr[:, :, ::-1]
+                print("   Seamless clone 적용 완료")
+
+            except Exception as e:
+                print(f"   Seamless clone 실패, alpha 블렌딩으로 대체: {e}")
+                blend_mode = "alpha"
+
+        if blend_mode == "alpha":
+            # Alpha 블렌딩 (그라디언트 마스크)
+            mask = np.zeros((target_h, target_w), dtype=np.float32)
+            center = (target_w // 2, target_h // 2)
+            for y in range(target_h):
+                for x in range(target_w):
+                    dist = np.sqrt((x - center[0])**2 + (y - center[1])**2)
+                    max_dist = np.sqrt(center[0]**2 + center[1]**2)
+                    mask[y, x] = max(0, 1 - (dist / max_dist) ** 1.5)
+
+            mask = cv2.GaussianBlur(mask, (31, 31), 0)
+            mask_3d = mask[:, :, np.newaxis]
+
+            # 블렌딩
+            region = result[y1:y2, x1:x2].astype(np.float32)
+            src_float = src_resized.astype(np.float32)
+            blended = region * (1 - mask_3d) + src_float * mask_3d
+            result[y1:y2, x1:x2] = blended.astype(np.uint8)
+            print("   Alpha 블렌딩 적용 완료")
+
+        elif blend_mode == "direct":
+            # 직접 붙여넣기
+            result[y1:y2, x1:x2] = src_resized
+            print("   직접 붙여넣기 완료")
+
+        return Image.fromarray(result)
+
+    def _apply_face_swap(
+        self,
+        result_image: Image.Image,
+        source_face_img: Image.Image
+    ) -> Image.Image:
+        """
+        생성된 결과에 InsightFace Face Swap 적용
+
+        Args:
+            result_image: 생성된 결과 이미지 (PIL Image)
+            source_face_img: 소스 얼굴 이미지 (PIL Image)
+
+        Returns:
+            Face swap이 적용된 이미지 (PIL Image)
+        """
+        if self.face_swapper is None:
+            print("   ⚠️ FaceSwapper가 초기화되지 않았습니다.")
+            return result_image
+
+        print("\n🔄 Face Swap: InsightFace inswapper 적용 중...")
+
+        try:
+            swapped = self.face_swapper.swap_face(result_image, source_face_img)
+            if swapped is not None:
+                print("   Face Swap 완료!")
+                return swapped
+            else:
+                print("   ⚠️ Face Swap 실패, 원본 결과 반환")
+                return result_image
+        except Exception as e:
+            print(f"   ⚠️ Face Swap 오류: {e}")
+            return result_image
 
     def _create_face_hair_composite(
         self,
@@ -767,7 +976,10 @@ class AutoIDPhotoCompositor:
         run_folder=None,
         stop_at=1.0,
         shortcut_scale=1.0,
-        save_preview=False
+        save_preview=False,
+        use_pre_paste=None,
+        pre_paste_denoising=0.65,
+        use_face_swap=None
     ):
         """
         자동 얼굴 합성 (머리카락/목 포함)
@@ -793,6 +1005,9 @@ class AutoIDPhotoCompositor:
             hair_blend_weight: CLIP Blending 시 머리카락 가중치 (기본: 0.4)
             mask_padding: 마스크 패딩 픽셀 (양수=확장, 음수=축소)
             stop_at: FaceID 적용 중단 시점 (0.0~1.0, 기본: 1.0=끝까지)
+            use_pre_paste: Pre-paste 사용 여부 (None이면 클래스 설정 사용)
+            pre_paste_denoising: Pre-paste 시 denoising strength (기본: 0.65)
+            use_face_swap: Face Swap 사용 여부 (None이면 클래스 설정 사용)
 
         Returns:
             합성된 이미지 (PIL Image)
@@ -800,6 +1015,16 @@ class AutoIDPhotoCompositor:
         if not self.has_ip_adapter:
             print("IP-Adapter가 필요합니다!")
             return None
+
+        # Pre-paste / Face Swap 플래그 해결 (None이면 클래스 설정 사용)
+        apply_pre_paste = use_pre_paste if use_pre_paste is not None else self.use_pre_paste
+        apply_face_swap = use_face_swap if use_face_swap is not None else self.use_face_swap
+
+        # Pre-paste 시 denoising strength 자동 조정
+        actual_denoising = denoising_strength
+        if apply_pre_paste:
+            actual_denoising = pre_paste_denoising
+            print(f"\n📋 Pre-paste 모드: denoising {denoising_strength} -> {actual_denoising}")
 
         # Preview 설정
         self.save_preview = save_preview
@@ -809,7 +1034,12 @@ class AutoIDPhotoCompositor:
             self.preview_path = f"{base_path}_preview.png"
 
         print("=" * 70)
-        print("자동 얼굴 합성 (머리카락 포함)" if include_hair else "자동 얼굴 합성")
+        mode_str = "자동 얼굴 합성 (머리카락 포함)" if include_hair else "자동 얼굴 합성"
+        if apply_pre_paste:
+            mode_str += " + Pre-paste"
+        if apply_face_swap:
+            mode_str += " + Face Swap"
+        print(mode_str)
         print("=" * 70)
 
         # 1. 원본 얼굴 이미지 로드 (크기 결정용)
@@ -861,6 +1091,20 @@ class AutoIDPhotoCompositor:
 
         # 배경 이미지를 비율 유지하며 리사이즈 (crop 없이)
         background_img = background_img.resize(target_size, Image.Resampling.LANCZOS)
+
+        # 2.5. Pre-paste 적용 (소스 얼굴을 배경에 미리 붙여넣기)
+        if apply_pre_paste:
+            background_img = self._pre_paste_face(
+                background_img,
+                source_face,
+                target_bbox=None,
+                blend_mode="seamless"
+            )
+            # Pre-paste 결과 저장 (디버깅용)
+            if save_mask and run_folder:
+                pre_paste_path = os.path.join(run_folder, "2.5_pre_paste.png")
+                background_img.save(pre_paste_path)
+                print(f"   Pre-paste 결과 저장: {os.path.basename(pre_paste_path)}")
 
         # 3. 배경에서 얼굴 자동 감지 + 마스크 생성
         print("\n배경에서 얼굴 마스크 자동 생성...")
@@ -1240,7 +1484,7 @@ class AutoIDPhotoCompositor:
             height=gen_height,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
-            strength=denoising_strength,
+            strength=actual_denoising,
             generator=generator,
             callback_on_step_end=step_callback,
             **ip_adapter_kwargs  # ip_adapter_image 또는 ip_adapter_image_embeds
@@ -1253,7 +1497,16 @@ class AutoIDPhotoCompositor:
             output_image = output_image.resize((orig_width, orig_height), Image.Resampling.LANCZOS)
             print(f"   출력 크기 복원: {gen_width}x{gen_height} -> {orig_width}x{orig_height}")
 
-        # 10. 저장
+        # 10. Face Swap 적용 (선택적)
+        if apply_face_swap:
+            output_image = self._apply_face_swap(output_image, source_face)
+            # Face Swap 전 결과 저장 (디버깅용)
+            if save_mask and run_folder:
+                pre_swap_path = os.path.join(run_folder, "5_result_before_swap.png")
+                result.images[0].save(pre_swap_path)
+                print(f"   Face Swap 전 결과 저장: {os.path.basename(pre_swap_path)}")
+
+        # 11. 저장
         output_image.save(output_path)
         print(f"\n✅ 완료! 저장됨: {output_path}")
         print("=" * 70)
@@ -1404,6 +1657,12 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
                        help='FaceID Plus: CLIP 이미지(머리스타일) 반영 비율 (0.0~1.0, 기본: 1.0)')
     parser.add_argument('--save-preview', action='store_true',
                        help='중간 생성 과정 preview 이미지 저장 (5 스텝마다)')
+    parser.add_argument('--use-pre-paste', action='store_true',
+                       help='Pre-paste 모드: 소스 얼굴을 배경에 미리 붙여넣기 (얼굴 위치 정확도 향상)')
+    parser.add_argument('--pre-paste-denoising', type=float, default=0.65,
+                       help='Pre-paste 시 denoising strength (기본: 0.65)')
+    parser.add_argument('--use-face-swap', action='store_true',
+                       help='Face Swap 모드: 생성 후 InsightFace inswapper로 얼굴 교체 (유사도 향상)')
     parser.add_argument('--show', action='store_true',
                        help='결과 표시')
 
@@ -1427,7 +1686,9 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
         use_faceid=args.use_faceid,
         use_faceid_plus=args.use_faceid_plus,
         use_dual_adapter=args.use_dual_adapter,
-        use_clip_blend=args.use_clip_blend
+        use_clip_blend=args.use_clip_blend,
+        use_pre_paste=args.use_pre_paste,
+        use_face_swap=args.use_face_swap
     )
 
     if not compositor.has_ip_adapter:
@@ -1491,7 +1752,10 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
         run_folder=run_folder,
         stop_at=args.stop_at,
         shortcut_scale=args.shortcut_scale,
-        save_preview=args.save_preview
+        save_preview=args.save_preview,
+        use_pre_paste=args.use_pre_paste,
+        pre_paste_denoising=args.pre_paste_denoising,
+        use_face_swap=args.use_face_swap
     )
 
     # 파라미터 저장

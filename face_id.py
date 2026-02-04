@@ -30,6 +30,153 @@ except ImportError as e:
     print("Install: pip install insightface onnxruntime")
 
 
+class FaceSwapper:
+    """
+    InsightFace-based face swapper using inswapper_128.onnx model.
+
+    Swaps faces between source and target images for better likeness preservation.
+    """
+
+    def __init__(self, device: str = "cpu"):
+        """
+        Initialize face swapper.
+
+        Args:
+            device: "cuda", "mps", or "cpu"
+        """
+        self.device = device
+        self.swapper = None
+        self.face_analyzer = None
+        self._initialized = False
+
+    def _get_providers(self) -> list:
+        """Get ONNX Runtime providers based on device."""
+        if self.device == "cuda":
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        elif self.device == "mps":
+            return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        else:
+            return ["CPUExecutionProvider"]
+
+    def load(self, model_path: str = None) -> bool:
+        """
+        Load face swapper model.
+
+        Args:
+            model_path: Path to inswapper_128.onnx (auto-download if None)
+
+        Returns:
+            True if loaded successfully
+        """
+        if not HAS_INSIGHTFACE:
+            print("InsightFace not available for face swap")
+            return False
+
+        if self._initialized:
+            return True
+
+        try:
+            import insightface
+            from insightface.app import FaceAnalysis
+
+            providers = self._get_providers()
+
+            # Initialize face analyzer
+            print(f"Loading FaceSwapper on {self.device}...")
+            self.face_analyzer = FaceAnalysis(
+                name="buffalo_l",
+                providers=providers
+            )
+            self.face_analyzer.prepare(ctx_id=0, det_size=(640, 640))
+
+            # Load inswapper model
+            if model_path is None:
+                # Auto-download from insightface
+                model_path = insightface.model_zoo.get_model(
+                    "inswapper_128.onnx",
+                    download=True,
+                    providers=providers
+                )
+                self.swapper = model_path
+            else:
+                import onnxruntime as ort
+                self.swapper = insightface.model_zoo.get_model(
+                    model_path,
+                    providers=providers
+                )
+
+            self._initialized = True
+            print("FaceSwapper loaded successfully")
+            return True
+
+        except Exception as e:
+            print(f"Failed to load FaceSwapper: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def swap_face(
+        self,
+        target_image: Union[str, Image.Image, np.ndarray],
+        source_image: Union[str, Image.Image, np.ndarray],
+    ) -> Optional[Image.Image]:
+        """
+        Swap face from source to target image.
+
+        Args:
+            target_image: Image where face will be replaced
+            source_image: Image containing the source face
+
+        Returns:
+            Result image with swapped face, or None if failed
+        """
+        if not self.load():
+            return None
+
+        # Convert to numpy arrays
+        if isinstance(target_image, str):
+            target_image = Image.open(target_image).convert("RGB")
+        if isinstance(source_image, str):
+            source_image = Image.open(source_image).convert("RGB")
+
+        if isinstance(target_image, Image.Image):
+            target_np = np.array(target_image)
+        else:
+            target_np = target_image
+
+        if isinstance(source_image, Image.Image):
+            source_np = np.array(source_image)
+        else:
+            source_np = source_image
+
+        # Convert RGB to BGR for InsightFace
+        target_bgr = target_np[:, :, ::-1].copy()
+        source_bgr = source_np[:, :, ::-1].copy()
+
+        # Detect faces
+        target_faces = self.face_analyzer.get(target_bgr)
+        source_faces = self.face_analyzer.get(source_bgr)
+
+        if len(target_faces) == 0:
+            print("No face detected in target image")
+            return None
+        if len(source_faces) == 0:
+            print("No face detected in source image")
+            return None
+
+        # Get largest faces
+        target_face = max(target_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        source_face = max(source_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+
+        # Swap face
+        result_bgr = self.swapper.get(target_bgr, target_face, source_face, paste_back=True)
+
+        # Convert BGR back to RGB
+        result_rgb = result_bgr[:, :, ::-1]
+
+        return Image.fromarray(result_rgb)
+
+
 class FaceIDExtractor:
     """
     InsightFace-based face embedding extractor for IP-Adapter FaceID.

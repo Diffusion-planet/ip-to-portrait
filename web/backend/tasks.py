@@ -140,6 +140,15 @@ def generate_image(
         if params.get('include_neck', False):
             cmd.append("--include-neck")
 
+        # Pre-paste mode (소스 얼굴 미리 붙여넣기)
+        if params.get('use_pre_paste', False):
+            cmd.append("--use-pre-paste")
+            cmd.extend(["--pre-paste-denoising", str(params.get('pre_paste_denoising', 0.65))])
+
+        # Face Swap mode (생성 후 얼굴 교체)
+        if params.get('use_face_swap', False):
+            cmd.append("--use-face-swap")
+
         # Enable preview generation
         cmd.append("--save-preview")
 

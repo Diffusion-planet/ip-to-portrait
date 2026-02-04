@@ -64,6 +64,13 @@ interface InpaintingParams {
   faceBlendWeight: number
   hairBlendWeight: number
 
+  // Pre-paste settings
+  usePrePaste: boolean
+  prePasteDenoising: number
+
+  // Face Swap settings
+  useFaceSwap: boolean
+
   // Auto prompt
   autoPrompt: boolean
 }
@@ -100,6 +107,9 @@ const DEFAULT_PARAMS: InpaintingParams = {
   shortcutScale: 1.0,
   faceBlendWeight: 0.6,
   hairBlendWeight: 0.4,
+  usePrePaste: false,
+  prePasteDenoising: 0.65,
+  useFaceSwap: false,
   autoPrompt: false,
 }
 
@@ -373,6 +383,9 @@ function HomePageContent() {
                     include_neck: params.includeNeck,
                     stop_at: params.stopAt,
                     shortcut_scale: params.shortcutScale,
+                    use_pre_paste: params.usePrePaste,
+                    pre_paste_denoising: params.prePasteDenoising,
+                    use_face_swap: params.useFaceSwap,
                     auto_prompt: autoPrompt,
                   },
                   count,
@@ -476,6 +489,9 @@ function HomePageContent() {
         shortcut_scale: params.shortcutScale,
         face_blend_weight: params.faceBlendWeight,
         hair_blend_weight: params.hairBlendWeight,
+        use_pre_paste: params.usePrePaste,
+        pre_paste_denoising: params.prePasteDenoising,
+        use_face_swap: params.useFaceSwap,
         auto_prompt: autoPrompt,
       },
       count,
@@ -567,6 +583,9 @@ function HomePageContent() {
         shortcutScale: item.params.shortcut_scale || DEFAULT_PARAMS.shortcutScale,
         faceBlendWeight: item.params.face_blend_weight || DEFAULT_PARAMS.faceBlendWeight,
         hairBlendWeight: item.params.hair_blend_weight || DEFAULT_PARAMS.hairBlendWeight,
+        usePrePaste: item.params.use_pre_paste ?? DEFAULT_PARAMS.usePrePaste,
+        prePasteDenoising: item.params.pre_paste_denoising || DEFAULT_PARAMS.prePasteDenoising,
+        useFaceSwap: item.params.use_face_swap ?? DEFAULT_PARAMS.useFaceSwap,
         autoPrompt: item.params.auto_prompt ?? DEFAULT_PARAMS.autoPrompt,
       })
     }

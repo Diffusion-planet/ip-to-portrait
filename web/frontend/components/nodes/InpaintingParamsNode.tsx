@@ -31,6 +31,13 @@ interface InpaintingParams {
   faceBlendWeight: number
   hairBlendWeight: number
 
+  // Pre-paste settings
+  usePrePaste: boolean
+  prePasteDenoising: number
+
+  // Face Swap settings
+  useFaceSwap: boolean
+
   // Auto prompt
   autoPrompt: boolean
 }
@@ -279,6 +286,46 @@ export function InpaintingParamsNode({
                 min={-20}
                 max={20}
               />
+            </div>
+
+            {/* Advanced Section */}
+            <div className="space-y-4 pt-6 border-t border-white/5">
+              <h4 className="text-2xl font-semibold text-[#666] uppercase tracking-wide mb-2">
+                Advanced
+              </h4>
+
+              <div className="flex items-center justify-between">
+                <span className="text-3xl text-text-secondary font-medium">Pre-paste</span>
+                <Toggle
+                  checked={params.usePrePaste}
+                  onChange={(v) => onParamChange('usePrePaste', v)}
+                />
+              </div>
+
+              {params.usePrePaste && (
+                <div className="space-y-4 pl-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-2xl text-text-muted font-medium">Denoise</span>
+                    <span className="text-2xl text-text-muted font-semibold">{params.prePasteDenoising.toFixed(2)}</span>
+                  </div>
+                  <Slider
+                    value={params.prePasteDenoising}
+                    onChange={(v) => onParamChange('prePasteDenoising', v)}
+                    min={0.4}
+                    max={0.8}
+                    step={0.05}
+                    showValue={false}
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <span className="text-3xl text-text-secondary font-medium">Face Swap</span>
+                <Toggle
+                  checked={params.useFaceSwap}
+                  onChange={(v) => onParamChange('useFaceSwap', v)}
+                />
+              </div>
             </div>
           </div>
         </div>

@@ -41,6 +41,13 @@ class GenerationParams(BaseModel):
     include_hair: bool = Field(default=True, description="Include hair in mask")
     include_neck: bool = Field(default=False, description="Include neck in mask")
 
+    # Pre-paste settings
+    use_pre_paste: bool = Field(default=False, description="Pre-paste source face before inpainting")
+    pre_paste_denoising: float = Field(default=0.65, ge=0.3, le=0.9, description="Denoising strength when pre-paste is enabled")
+
+    # Face Swap settings
+    use_face_swap: bool = Field(default=False, description="Apply InsightFace swap after generation")
+
     # Prompt settings
     auto_prompt: bool = Field(default=False, description="Auto-generate prompt with Gemini Vision")
 
