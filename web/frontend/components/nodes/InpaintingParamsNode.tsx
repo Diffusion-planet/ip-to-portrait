@@ -25,6 +25,7 @@ interface InpaintingParams {
 
   // FaceID timing
   stopAt: number
+  shortcutScale: number
 
   // CLIP Blend weights
   faceBlendWeight: number
@@ -174,6 +175,22 @@ export function InpaintingParamsNode({
                   step={0.05}
                   showValue={false}
                 />
+                {params.adapterMode === 'faceid_plus' && (
+                  <>
+                    <div className="flex items-center justify-between mt-4">
+                      <span className="text-3xl text-text-secondary font-medium">Hair Style</span>
+                      <span className="text-3xl text-text-muted font-semibold">{(params.shortcutScale * 100).toFixed(0)}%</span>
+                    </div>
+                    <Slider
+                      value={params.shortcutScale}
+                      onChange={(v) => onParamChange('shortcutScale', v)}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      showValue={false}
+                    />
+                  </>
+                )}
               </div>
             )}
 

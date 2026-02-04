@@ -58,6 +58,7 @@ interface InpaintingParams {
 
   // FaceID timing
   stopAt: number
+  shortcutScale: number
 
   // CLIP Blend weights
   faceBlendWeight: number
@@ -96,6 +97,7 @@ const DEFAULT_PARAMS: InpaintingParams = {
   includeHair: true,
   includeNeck: true,
   stopAt: 1.0,
+  shortcutScale: 1.0,
   faceBlendWeight: 0.6,
   hairBlendWeight: 0.4,
   autoPrompt: false,
@@ -370,6 +372,7 @@ function HomePageContent() {
                     include_hair: params.includeHair,
                     include_neck: params.includeNeck,
                     stop_at: params.stopAt,
+                    shortcut_scale: params.shortcutScale,
                     auto_prompt: autoPrompt,
                   },
                   count,
@@ -470,6 +473,7 @@ function HomePageContent() {
         include_hair: params.includeHair,
         include_neck: params.includeNeck,
         stop_at: params.stopAt,
+        shortcut_scale: params.shortcutScale,
         face_blend_weight: params.faceBlendWeight,
         hair_blend_weight: params.hairBlendWeight,
         auto_prompt: autoPrompt,
@@ -560,6 +564,7 @@ function HomePageContent() {
         includeHair: item.params.include_hair ?? DEFAULT_PARAMS.includeHair,
         includeNeck: item.params.include_neck ?? DEFAULT_PARAMS.includeNeck,
         stopAt: item.params.stop_at || DEFAULT_PARAMS.stopAt,
+        shortcutScale: item.params.shortcut_scale || DEFAULT_PARAMS.shortcutScale,
         faceBlendWeight: item.params.face_blend_weight || DEFAULT_PARAMS.faceBlendWeight,
         hairBlendWeight: item.params.hair_blend_weight || DEFAULT_PARAMS.hairBlendWeight,
         autoPrompt: item.params.auto_prompt ?? DEFAULT_PARAMS.autoPrompt,

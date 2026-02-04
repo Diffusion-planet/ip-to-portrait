@@ -142,7 +142,8 @@ def save_run_params(run_folder: str, args, command: str, actual_seed: int,
         # CLIP Blending 파라미터
         f.write("[ CLIP Blending ]\n")
         f.write(f"face_blend_weight: {args.face_blend_weight}\n")
-        f.write(f"hair_blend_weight: {args.hair_blend_weight}\n\n")
+        f.write(f"hair_blend_weight: {args.hair_blend_weight}\n")
+        f.write(f"shortcut_scale: {args.shortcut_scale}\n\n")
 
         # 재현 명령어
         f.write("=" * 70 + "\n")
@@ -760,11 +761,12 @@ class AutoIDPhotoCompositor:
         include_hair=True,
         include_neck=False,
         auto_detect_gender=True,
-        face_blend_weight=0.6,
-        hair_blend_weight=0.4,
+        face_blend_weight=0.8,
+        hair_blend_weight=0.2,
         mask_padding=0,
         run_folder=None,
         stop_at=1.0,
+        shortcut_scale=1.0,
         save_preview=False
     ):
         """
@@ -1087,7 +1089,8 @@ class AutoIDPhotoCompositor:
 
                 # Plus v2: CLIP 임베딩을 projection layer에 직접 설정
                 self.pipeline.unet.encoder_hid_proj.image_projection_layers[0].clip_embeds = clip_embeds_cfg
-                self.pipeline.unet.encoder_hid_proj.image_projection_layers[0].shortcut_scale = 1.0
+                self.pipeline.unet.encoder_hid_proj.image_projection_layers[0].shortcut_scale = shortcut_scale
+                print(f"      shortcut_scale: {shortcut_scale:.2f} (머리스타일 반영 비율)")
 
                 # 얼굴 임베딩만 전달
                 ip_adapter_kwargs["ip_adapter_image_embeds"] = [face_embedding_cfg]
@@ -1397,6 +1400,8 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
                        help='CLIP Blending: 머리카락 가중치 (기본: 0.4)')
     parser.add_argument('--stop-at', type=float, default=1.0,
                        help='FaceID 적용 중단 시점 (0.0~1.0, 기본: 1.0=끝까지)')
+    parser.add_argument('--shortcut-scale', type=float, default=1.0,
+                       help='FaceID Plus: CLIP 이미지(머리스타일) 반영 비율 (0.0~1.0, 기본: 1.0)')
     parser.add_argument('--save-preview', action='store_true',
                        help='중간 생성 과정 preview 이미지 저장 (5 스텝마다)')
     parser.add_argument('--show', action='store_true',
@@ -1485,6 +1490,7 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
         mask_padding=args.mask_padding,
         run_folder=run_folder,
         stop_at=args.stop_at,
+        shortcut_scale=args.shortcut_scale,
         save_preview=args.save_preview
     )
 

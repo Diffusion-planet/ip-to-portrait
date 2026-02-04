@@ -477,6 +477,7 @@ class PipelineService:
                     hair_blend_weight=params.hair_blend_weight,
                     mask_padding=params.mask_padding,
                     stop_at=params.stop_at,
+                    shortcut_scale=params.shortcut_scale,
                     save_preview=True,
                 )
                 return result
@@ -539,6 +540,7 @@ class PipelineService:
             cmd.append("--use-faceid")
         elif params.adapter_mode == "faceid_plus":
             cmd.append("--use-faceid-plus")
+            cmd.extend(["--shortcut-scale", str(params.shortcut_scale)])
         elif params.adapter_mode == "dual":
             cmd.append("--use-dual-adapter")
         elif params.adapter_mode == "clip_blend":

@@ -27,11 +27,12 @@ class GenerationParams(BaseModel):
     # Face settings
     face_strength: float = Field(default=0.85, ge=0.0, le=1.5, description="Face strength")
     stop_at: float = Field(default=1.0, ge=0.0, le=1.0, description="FaceID stop at")
+    shortcut_scale: float = Field(default=1.0, ge=0.0, le=1.0, description="FaceID Plus: CLIP image (hairstyle) influence ratio")
 
     # Adapter mode
     adapter_mode: str = Field(default="faceid_plus", description="Adapter mode: faceid, faceid_plus, dual, clip_blend")
-    face_blend_weight: float = Field(default=0.6, ge=0.0, le=1.0, description="Face blend weight for clip_blend mode")
-    hair_blend_weight: float = Field(default=0.4, ge=0.0, le=1.0, description="Hair blend weight for clip_blend mode")
+    face_blend_weight: float = Field(default=0.8, ge=0.0, le=1.0, description="Face blend weight for clip_blend mode")
+    hair_blend_weight: float = Field(default=0.2, ge=0.0, le=1.0, description="Hair blend weight for clip_blend mode")
 
     # Mask settings
     mask_blur: int = Field(default=15, ge=0, le=64, description="Mask blur")

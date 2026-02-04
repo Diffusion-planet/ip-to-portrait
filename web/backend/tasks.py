@@ -126,12 +126,13 @@ def generate_image(
             cmd.append("--use-faceid")
         elif adapter_mode == "faceid_plus":
             cmd.append("--use-faceid-plus")
+            cmd.extend(["--shortcut-scale", str(params.get('shortcut_scale', 1.0))])
         elif adapter_mode == "dual":
             cmd.append("--use-dual-adapter")
         elif adapter_mode == "clip_blend":
             cmd.append("--use-clip-blend")
-            cmd.extend(["--face-blend-weight", str(params.get('face_blend_weight', 0.6))])
-            cmd.extend(["--hair-blend-weight", str(params.get('hair_blend_weight', 0.4))])
+            cmd.extend(["--face-blend-weight", str(params.get('face_blend_weight', 0.8))])
+            cmd.extend(["--hair-blend-weight", str(params.get('hair_blend_weight', 0.2))])
 
         # Add mask flags
         if not params.get('include_hair', True):
