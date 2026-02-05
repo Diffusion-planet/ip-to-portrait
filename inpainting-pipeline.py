@@ -10,6 +10,7 @@ v5: CLIP Blending 모드 추가 - 얼굴/머리카락 CLIP 임베딩 블렌딩
 """
 
 import torch
+import gc
 from diffusers import AutoPipelineForInpainting
 from PIL import Image, ImageFilter, ImageOps
 import numpy as np
@@ -20,6 +21,14 @@ import shutil
 import sys
 import random
 from datetime import datetime
+
+
+def cleanup_gpu_memory():
+    """GPU 메모리 정리 - 생성 완료 후 호출"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    gc.collect()
 
 
 def get_input_path(input_path: str) -> str:
@@ -178,6 +187,14 @@ def save_run_params(run_folder: str, args, command: str, actual_seed: int,
             reproduce_cmd += f" --pre-paste-denoising {args.pre_paste_denoising}"
         if hasattr(args, 'use_face_swap') and args.use_face_swap:
             reproduce_cmd += " --use-face-swap"
+            if hasattr(args, 'face_swap_model'):
+                reproduce_cmd += f" --face-swap-model {args.face_swap_model}"
+        if hasattr(args, 'use_face_enhance') and args.use_face_enhance:
+            reproduce_cmd += " --use-face-enhance"
+            reproduce_cmd += f" --face-enhance-strength {args.face_enhance_strength}"
+        if hasattr(args, 'use_swap_refinement') and args.use_swap_refinement:
+            reproduce_cmd += " --use-swap-refinement"
+            reproduce_cmd += f" --swap-refinement-strength {args.swap_refinement_strength}"
 
         f.write(f"{reproduce_cmd}\n")
 
@@ -196,17 +213,23 @@ try:
     print("[DEBUG inpainting-pipeline.py] Attempting to import face_id module...")
     print(f"[DEBUG inpainting-pipeline.py] sys.path: {__import__('sys').path[:3]}")
     print(f"[DEBUG inpainting-pipeline.py] __file__: {__file__}")
-    from face_id import FaceIDExtractor, FaceIDIPAdapter, FaceSwapper, check_insightface_available
+    from face_id import FaceIDExtractor, FaceIDIPAdapter, FaceSwapper, FaceEnhancer, check_insightface_available, HAS_GFPGAN, get_face_swapper
     print("[DEBUG inpainting-pipeline.py] ✅ face_id module imported successfully!")
     HAS_FACEID = check_insightface_available()
     HAS_FACESWAP = HAS_FACEID  # FaceSwap requires InsightFace
+    HAS_FACE_ENHANCE = HAS_GFPGAN  # Face Enhance requires GFPGAN
     print(f"[DEBUG inpainting-pipeline.py] check_insightface_available() = {HAS_FACEID}")
+    print(f"[DEBUG inpainting-pipeline.py] HAS_GFPGAN = {HAS_GFPGAN}")
     if not HAS_FACEID:
         print("InsightFace not installed. FaceID mode unavailable.")
         print("Install: pip install insightface onnxruntime")
+    if not HAS_GFPGAN:
+        print("GFPGAN not installed. Face Enhance mode unavailable.")
+        print("Install: pip install gfpgan")
 except ImportError as e:
     HAS_FACEID = False
     HAS_FACESWAP = False
+    HAS_FACE_ENHANCE = False
     print(f"[DEBUG inpainting-pipeline.py] ❌ face_id import failed: {e}")
     print("face_id.py not found. FaceID mode unavailable.")
 
@@ -233,7 +256,8 @@ class AutoIDPhotoCompositor:
 
     def __init__(self, detection_method='opencv', use_bisenet=True, use_faceid=False,
                  use_dual_adapter=False, use_clip_blend=False, use_faceid_plus=False,
-                 use_pre_paste=False, use_face_swap=False):
+                 use_pre_paste=False, use_face_swap=False, use_face_enhance=False,
+                 use_swap_refinement=False, no_ip_adapter=False, face_swap_model='insightface'):
         """
         파이프라인 초기화
 
@@ -244,7 +268,11 @@ class AutoIDPhotoCompositor:
             use_dual_adapter: Dual IP-Adapter 모드 (FaceID + CLIP for hair transfer)
             use_clip_blend: CLIP Blending 모드 (얼굴+머리카락 CLIP 임베딩 블렌딩)
             use_pre_paste: Pre-paste 모드 (소스 얼굴을 미리 붙여넣기, denoising 낮춤)
-            use_face_swap: Face Swap 모드 (생성 후 InsightFace로 얼굴 교체)
+            use_face_swap: Face Swap 모드 (생성 후 얼굴 교체)
+            use_face_enhance: Face Enhance 모드 (GFPGAN으로 얼굴 화질 개선)
+            use_swap_refinement: Face Swap Refinement 모드 (Face Swap 후 경미한 인페인팅으로 블렌딩)
+            no_ip_adapter: IP-Adapter 없이 순수 인페인팅만 수행 (Pre-paste와 함께 사용 권장)
+            face_swap_model: Face Swap 모델 선택 ('insightface' 빠름, 'ghost' 고화질)
         """
         print("=" * 70)
         print("Inpainting Pipeline v5")
@@ -255,29 +283,44 @@ class AutoIDPhotoCompositor:
         print(f"디바이스: {self.device}")
 
         # 모드 설정
-        # Dual adapter requires both FaceID and CLIP
+        self.no_ip_adapter = no_ip_adapter  # 순수 인페인팅 모드 (IP-Adapter 없음)
+        print(f"[DEBUG __init__] no_ip_adapter = {no_ip_adapter}")
         print(f"[DEBUG __init__] HAS_FACEID = {HAS_FACEID}")
         print(f"[DEBUG __init__] use_faceid_plus argument = {use_faceid_plus}")
-        self.use_dual_adapter = use_dual_adapter and HAS_FACEID
-        self.use_faceid = (use_faceid or use_dual_adapter or use_faceid_plus) and HAS_FACEID
-        self.use_faceid_plus = use_faceid_plus and HAS_FACEID  # FaceID Plus v2 (얼굴+머리스타일)
-        self.use_clip_blend = use_clip_blend  # CLIP Blending mode
+
+        # no_ip_adapter 모드면 모든 IP-Adapter 관련 기능 비활성화
+        if no_ip_adapter:
+            self.use_dual_adapter = False
+            self.use_faceid = False
+            self.use_faceid_plus = False
+            self.use_clip_blend = False
+            self.ip_adapter_mode = "none"
+            print("📋 Simple Inpainting 모드 (IP-Adapter 없음)")
+        else:
+            # Dual adapter requires both FaceID and CLIP
+            self.use_dual_adapter = use_dual_adapter and HAS_FACEID
+            self.use_faceid = (use_faceid or use_dual_adapter or use_faceid_plus) and HAS_FACEID
+            self.use_faceid_plus = use_faceid_plus and HAS_FACEID  # FaceID Plus v2 (얼굴+머리스타일)
+            self.use_clip_blend = use_clip_blend  # CLIP Blending mode
+
+            if self.use_clip_blend:
+                self.ip_adapter_mode = "clip_blend"  # CLIP embedding blending
+            elif self.use_faceid_plus:
+                self.ip_adapter_mode = "faceid_plus"  # FaceID Plus v2 (InsightFace + CLIP)
+            elif self.use_dual_adapter:
+                self.ip_adapter_mode = "dual"  # FaceID + CLIP
+            elif self.use_faceid:
+                self.ip_adapter_mode = "faceid"
+            else:
+                self.ip_adapter_mode = "standard"
+
         self.use_pre_paste = use_pre_paste  # Pre-paste mode (소스 얼굴 미리 붙여넣기)
         self.use_face_swap = use_face_swap and HAS_FACESWAP  # Face Swap mode (생성 후 얼굴 교체)
+        self.use_swap_refinement = use_swap_refinement  # Face Swap Refinement mode (Face Swap 후 경미한 인페인팅)
         print(f"[DEBUG __init__] self.use_faceid_plus = {self.use_faceid_plus}")
         print(f"[DEBUG __init__] self.use_pre_paste = {self.use_pre_paste}")
         print(f"[DEBUG __init__] self.use_face_swap = {self.use_face_swap}")
-
-        if self.use_clip_blend:
-            self.ip_adapter_mode = "clip_blend"  # CLIP embedding blending
-        elif self.use_faceid_plus:
-            self.ip_adapter_mode = "faceid_plus"  # FaceID Plus v2 (InsightFace + CLIP)
-        elif self.use_dual_adapter:
-            self.ip_adapter_mode = "dual"  # FaceID + CLIP
-        elif self.use_faceid:
-            self.ip_adapter_mode = "faceid"
-        else:
-            self.ip_adapter_mode = "standard"
+        print(f"[DEBUG __init__] self.use_swap_refinement = {self.use_swap_refinement}")
 
         if (use_faceid or use_dual_adapter) and not HAS_FACEID:
             print("FaceID 요청되었으나 InsightFace 미설치. Standard 모드로 전환.")
@@ -310,18 +353,47 @@ class AutoIDPhotoCompositor:
                 self.ip_adapter_mode = "standard"
 
         # FaceSwapper 초기화 (생성 후 얼굴 교체용)
+        # CPU에서 실행 - GPU 메모리 충돌 방지 (diffusion 모델이 GPU 점유)
         self.face_swapper = None
+        self.face_swap_model = face_swap_model
+        self.face_swap_model_name = None  # Actual model name for logging
         if self.use_face_swap:
             try:
-                self.face_swapper = FaceSwapper(device=self.device)
+                self.face_swapper = get_face_swapper(model=face_swap_model, device="cpu")  # 항상 CPU 사용
                 if self.face_swapper.load():
-                    print("FaceSwapper 준비 완료 (inswapper_128)")
+                    # Check actual swapper type (Ghost may fall back to InsightFace)
+                    swapper_class = type(self.face_swapper).__name__
+                    if swapper_class == "GhostFaceSwapper":
+                        self.face_swap_model_name = "Ghost (고화질)"
+                    else:
+                        # InsightFace - show actual model name
+                        actual_model = getattr(self.face_swapper, '_model_name', 'inswapper_128')
+                        self.face_swap_model_name = f"InsightFace ({actual_model})"
+                        if face_swap_model == "ghost":
+                            print("⚠️ Ghost 사용 불가, InsightFace로 폴백")
+                    print(f"FaceSwapper 준비 완료 (CPU, {self.face_swap_model_name})")
                 else:
                     print("FaceSwapper 로딩 실패, Face Swap 비활성화")
                     self.use_face_swap = False
             except Exception as e:
                 print(f"FaceSwapper 초기화 실패: {e}")
                 self.use_face_swap = False
+
+        # FaceEnhancer 초기화 (얼굴 화질 개선용 - GFPGAN)
+        # CPU에서 실행 - GPU 메모리 충돌 방지
+        self.use_face_enhance = use_face_enhance and HAS_FACE_ENHANCE
+        self.face_enhancer = None
+        if self.use_face_enhance:
+            try:
+                self.face_enhancer = FaceEnhancer(device="cpu", upscale=1)  # upscale=1: 원본 크기 유지
+                if self.face_enhancer.load():
+                    print("FaceEnhancer 준비 완료 (CPU, GFPGAN v1.4)")
+                else:
+                    print("FaceEnhancer 로딩 실패, Face Enhance 비활성화")
+                    self.use_face_enhance = False
+            except Exception as e:
+                print(f"FaceEnhancer 초기화 실패: {e}")
+                self.use_face_enhance = False
 
         # dtype 설정 (CPU는 float32 사용)
         self.dtype = torch.float32 if self.device == "cpu" else torch.float16
@@ -335,9 +407,14 @@ class AutoIDPhotoCompositor:
         )
 
         # IP-Adapter 로드 (모드에 따라 다른 어댑터)
-        self.has_ip_adapter = self._load_ip_adapter()
-        if not self.has_ip_adapter:
-            return
+        # no_ip_adapter 모드면 IP-Adapter 로딩 건너뛰기
+        if self.no_ip_adapter:
+            self.has_ip_adapter = True  # 파이프라인은 사용 가능
+            print("IP-Adapter 로딩 건너뜀 (Simple Inpainting 모드)")
+        else:
+            self.has_ip_adapter = self._load_ip_adapter()
+            if not self.has_ip_adapter:
+                return
 
         self.pipeline.to(self.device)
 
@@ -355,7 +432,11 @@ class AutoIDPhotoCompositor:
 
         # 모드 정보 출력
         print(f"\n현재 모드: {self.ip_adapter_mode.upper()}")
-        if self.use_clip_blend:
+        if self.no_ip_adapter:
+            print("  - Simple Inpainting (IP-Adapter 없음)")
+            print("  - 순수 인페인팅만 수행")
+            print("  - Pre-paste와 함께 사용 시 얼굴 조화로운 블렌딩")
+        elif self.use_clip_blend:
             print("  - CLIP Blending Mode")
             print("  - 얼굴/머리카락 영역 별도 CLIP 인코딩")
             print("  - 가중치 블렌딩으로 두 특성 동시 반영")
@@ -387,7 +468,8 @@ class AutoIDPhotoCompositor:
             print("  - 얼굴 위치/크기 더 정확하게 유지")
         if self.use_face_swap:
             print("\n🔄 Face Swap 모드 활성화")
-            print("  - 생성 후 InsightFace inswapper 적용")
+            model_display = self.face_swap_model_name or self.face_swap_model
+            print(f"  - 생성 후 {model_display} 적용")
             print("  - 얼굴 유사도 향상")
         print("=" * 70)
 
@@ -562,7 +644,8 @@ class AutoIDPhotoCompositor:
         background_img: Image.Image,
         source_face_img: Image.Image,
         target_bbox: tuple = None,
-        blend_mode: str = "seamless"
+        blend_mode: str = "seamless",
+        run_folder: str = None
     ) -> Image.Image:
         """
         소스 얼굴을 배경 이미지에 미리 붙여넣기 (Pre-paste)
@@ -575,11 +658,18 @@ class AutoIDPhotoCompositor:
             source_face_img: 소스 얼굴 이미지 (PIL Image)
             target_bbox: 타겟 얼굴 영역 (x1, y1, x2, y2), None이면 자동 감지
             blend_mode: 블렌딩 모드 ("seamless", "alpha", "direct")
+            run_folder: 중간 결과 저장 폴더 (디버깅용)
 
         Returns:
             소스 얼굴이 붙여넣어진 이미지 (PIL Image)
         """
         print("\n📋 Pre-paste: 소스 얼굴 미리 붙여넣기...")
+
+        # 디버깅: 소스 얼굴 저장
+        if run_folder:
+            src_path = os.path.join(run_folder, "2.1_prepaste_source_face.png")
+            source_face_img.save(src_path)
+            print(f"   Pre-paste 소스 얼굴 저장: {os.path.basename(src_path)}")
 
         bg_array = np.array(background_img)
         src_array = np.array(source_face_img)
@@ -609,6 +699,16 @@ class AutoIDPhotoCompositor:
         target_w = x2 - x1
         target_h = y2 - y1
 
+        # 디버깅: 타겟 영역 시각화 (배경에 박스 표시)
+        if run_folder:
+            target_vis = bg_array.copy()
+            cv2.rectangle(target_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            cv2.putText(target_vis, "Target Face Area", (x1, y1-10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            target_vis_path = os.path.join(run_folder, "2.2_prepaste_target_area.png")
+            Image.fromarray(target_vis).save(target_vis_path)
+            print(f"   Pre-paste 타겟 영역 저장: {os.path.basename(target_vis_path)}")
+
         # 소스 얼굴에서 얼굴 영역 감지
         src_bgr = src_array[:, :, ::-1]
         src_bbox = None
@@ -635,18 +735,85 @@ class AutoIDPhotoCompositor:
         # 타겟 크기에 맞게 리사이즈
         src_resized = cv2.resize(src_cropped, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
 
+        # 디버깅: 크롭/리사이즈된 소스 얼굴 저장
+        if run_folder:
+            cropped_path = os.path.join(run_folder, "2.3_prepaste_source_cropped.png")
+            Image.fromarray(src_cropped).save(cropped_path)
+            print(f"   Pre-paste 크롭된 소스 저장: {os.path.basename(cropped_path)}")
+
+            resized_path = os.path.join(run_folder, "2.4_prepaste_source_resized.png")
+            Image.fromarray(src_resized).save(resized_path)
+            print(f"   Pre-paste 리사이즈된 소스 저장: {os.path.basename(resized_path)}")
+
         # 블렌딩
         result = bg_array.copy()
 
         if blend_mode == "seamless":
             # OpenCV seamlessClone 사용
             try:
-                # 마스크 생성 (타원형)
-                mask = np.zeros((target_h, target_w), dtype=np.uint8)
-                center = (target_w // 2, target_h // 2)
-                axes = (int(target_w * 0.45), int(target_h * 0.48))
-                cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
-                mask = cv2.GaussianBlur(mask, (21, 21), 0)
+                # BiSeNet으로 정교한 마스크 생성 시도
+                mask = None
+                if self.use_bisenet and self.face_parser is not None:
+                    try:
+                        # 소스 얼굴 크롭 이미지에서 BiSeNet 마스크 생성
+                        src_cropped_pil = Image.fromarray(src_cropped)
+                        bisenet_mask = self.face_parser.get_face_hair_mask(
+                            src_cropped_pil,
+                            target_size=src_cropped_pil.size,  # 크롭 이미지 크기
+                            include_hair=True,
+                            include_neck=False,
+                            blur_radius=0,  # 블러 없이 (나중에 별도로 적용)
+                            expand_ratio=1.0  # 확장 없이 정확한 영역만
+                        )
+                        if bisenet_mask is not None:
+                            # 마스크를 numpy 배열로 변환
+                            bisenet_mask_array = np.array(bisenet_mask.convert('L'))
+
+                            # 디버깅: BiSeNet 원본 마스크 저장 (리사이즈 전)
+                            if run_folder:
+                                raw_mask_path = os.path.join(run_folder, "2.5a_prepaste_bisenet_raw_mask.png")
+                                Image.fromarray(bisenet_mask_array).save(raw_mask_path)
+                                print(f"   BiSeNet 원본 마스크 저장: {os.path.basename(raw_mask_path)}")
+
+                            # 타겟 크기에 맞게 리사이즈
+                            mask = cv2.resize(bisenet_mask_array, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+
+                            # 디버깅: 리사이즈된 마스크 저장 (블러 전)
+                            if run_folder:
+                                resized_mask_path = os.path.join(run_folder, "2.5b_prepaste_mask_resized.png")
+                                Image.fromarray(mask).save(resized_mask_path)
+                                print(f"   리사이즈 마스크 저장: {os.path.basename(resized_mask_path)}")
+
+                            # seamlessClone을 위해 완전 이진 마스크로 변환
+                            # GaussianBlur는 seamlessClone에서 자체적으로 처리하므로 필요없음
+                            _, mask = cv2.threshold(mask, 100, 255, cv2.THRESH_BINARY)
+
+                            # 모폴로지 연산으로 가장자리 정리 (블러 대신)
+                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+                            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+                            # 완전 이진화 보장 (중간값 제거)
+                            mask = np.where(mask >= 128, 255, 0).astype(np.uint8)
+                            print(f"   BiSeNet 이진 마스크 생성: min={mask.min()}, max={mask.max()}, nonzero={np.count_nonzero(mask)}")
+                    except Exception as e:
+                        print(f"   BiSeNet 마스크 실패: {e}, 타원 마스크로 대체")
+                        mask = None
+
+                # BiSeNet 실패 시 기본 타원 마스크 사용
+                if mask is None:
+                    mask = np.zeros((target_h, target_w), dtype=np.uint8)
+                    center = (target_w // 2, target_h // 2)
+                    axes = (int(target_w * 0.45), int(target_h * 0.48))
+                    cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
+                    # 이미 완전 이진 마스크 (cv2.ellipse가 255로 채움)
+                    print(f"   타원형 기본 마스크 사용: min={mask.min()}, max={mask.max()}")
+
+                # 디버깅: 블렌딩 마스크 저장
+                if run_folder:
+                    mask_path = os.path.join(run_folder, "2.5_prepaste_blend_mask.png")
+                    Image.fromarray(mask).save(mask_path)
+                    print(f"   Pre-paste 블렌딩 마스크 저장: {os.path.basename(mask_path)}")
 
                 # seamlessClone center 계산
                 clone_center = (x1 + target_w // 2, y1 + target_h // 2)
@@ -655,29 +822,62 @@ class AutoIDPhotoCompositor:
                 result_bgr = result[:, :, ::-1].copy()
                 src_resized_bgr = src_resized[:, :, ::-1]
 
+                # seamlessClone용 완전 이진 마스크 확인 (이미 이진화됨)
+                binary_mask = mask.copy()
+                # 혹시 모르니 한번 더 이진화 보장
+                binary_mask = np.where(binary_mask >= 128, 255, 0).astype(np.uint8)
+
+                # 마스크 유효성 검사
+                unique_vals = np.unique(binary_mask)
+                nonzero_ratio = np.count_nonzero(binary_mask) / binary_mask.size
+                print(f"   최종 마스크: 고유값={unique_vals}, 비율={nonzero_ratio:.2%}")
+
+                if nonzero_ratio < 0.01:
+                    print("   ⚠️ 마스크 영역이 너무 작음! 타원 마스크로 대체")
+                    binary_mask = np.zeros((target_h, target_w), dtype=np.uint8)
+                    center = (target_w // 2, target_h // 2)
+                    axes = (int(target_w * 0.45), int(target_h * 0.48))
+                    cv2.ellipse(binary_mask, center, axes, 0, 0, 360, 255, -1)
+
+                # 디버깅: 최종 이진 마스크 저장
+                if run_folder:
+                    binary_mask_path = os.path.join(run_folder, "2.5c_prepaste_binary_mask.png")
+                    Image.fromarray(binary_mask).save(binary_mask_path)
+                    print(f"   최종 이진 마스크 저장: {os.path.basename(binary_mask_path)}")
+
                 # Seamless clone
+                print(f"   seamlessClone 호출: src={src_resized_bgr.shape}, dst={result_bgr.shape}, mask={binary_mask.shape}, center={clone_center}")
                 result_bgr = cv2.seamlessClone(
-                    src_resized_bgr, result_bgr, mask,
+                    src_resized_bgr, result_bgr, binary_mask,
                     clone_center, cv2.NORMAL_CLONE
                 )
                 result = result_bgr[:, :, ::-1]
-                print("   Seamless clone 적용 완료")
+                print("   ✅ Seamless clone 적용 완료 (불투명 합성)")
 
             except Exception as e:
-                print(f"   Seamless clone 실패, alpha 블렌딩으로 대체: {e}")
+                import traceback
+                print(f"   ❌ Seamless clone 실패!")
+                print(f"   에러: {e}")
+                traceback.print_exc()
+                print("   → alpha 블렌딩으로 대체 (그라디언트 마스크 사용)")
                 blend_mode = "alpha"
 
         if blend_mode == "alpha":
-            # Alpha 블렌딩 (그라디언트 마스크)
+            # Alpha 블렌딩 (그라디언트 마스크) - 반투명 효과 발생!
+            print("   ⚠️ Alpha 블렌딩 사용 - 이 모드는 반투명 효과를 일으킬 수 있음!")
+
+            # 그라디언트 대신 이진 마스크로 직접 합성 시도
+            # 이렇게 하면 반투명 문제 해결됨
             mask = np.zeros((target_h, target_w), dtype=np.float32)
             center = (target_w // 2, target_h // 2)
-            for y in range(target_h):
-                for x in range(target_w):
-                    dist = np.sqrt((x - center[0])**2 + (y - center[1])**2)
-                    max_dist = np.sqrt(center[0]**2 + center[1]**2)
-                    mask[y, x] = max(0, 1 - (dist / max_dist) ** 1.5)
+            axes = (int(target_w * 0.45), int(target_h * 0.48))
 
-            mask = cv2.GaussianBlur(mask, (31, 31), 0)
+            # 타원 마스크를 float로 생성 (1.0 = 불투명)
+            mask_uint8 = np.zeros((target_h, target_w), dtype=np.uint8)
+            cv2.ellipse(mask_uint8, center, axes, 0, 0, 360, 255, -1)
+            # 가장자리만 아주 살짝 블러 (5픽셀)
+            mask_uint8 = cv2.GaussianBlur(mask_uint8, (11, 11), 0)
+            mask = mask_uint8.astype(np.float32) / 255.0
             mask_3d = mask[:, :, np.newaxis]
 
             # 블렌딩
@@ -685,7 +885,7 @@ class AutoIDPhotoCompositor:
             src_float = src_resized.astype(np.float32)
             blended = region * (1 - mask_3d) + src_float * mask_3d
             result[y1:y2, x1:x2] = blended.astype(np.uint8)
-            print("   Alpha 블렌딩 적용 완료")
+            print("   Alpha 블렌딩 적용 완료 (개선된 타원 마스크)")
 
         elif blend_mode == "direct":
             # 직접 붙여넣기
@@ -697,7 +897,8 @@ class AutoIDPhotoCompositor:
     def _apply_face_swap(
         self,
         result_image: Image.Image,
-        source_face_img: Image.Image
+        source_face_img: Image.Image,
+        run_folder: str = None
     ) -> Image.Image:
         """
         생성된 결과에 InsightFace Face Swap 적용
@@ -705,6 +906,7 @@ class AutoIDPhotoCompositor:
         Args:
             result_image: 생성된 결과 이미지 (PIL Image)
             source_face_img: 소스 얼굴 이미지 (PIL Image)
+            run_folder: 중간 결과 저장 폴더 (디버깅용)
 
         Returns:
             Face swap이 적용된 이미지 (PIL Image)
@@ -713,12 +915,25 @@ class AutoIDPhotoCompositor:
             print("   ⚠️ FaceSwapper가 초기화되지 않았습니다.")
             return result_image
 
-        print("\n🔄 Face Swap: InsightFace inswapper 적용 중...")
+        # Use stored model name
+        model_name = self.face_swap_model_name or self.face_swap_model
+        print(f"\n🔄 Face Swap: {model_name} 적용 중...")
+
+        # 디버깅: 소스 얼굴 저장
+        if run_folder:
+            src_path = os.path.join(run_folder, "6.0_faceswap_source.png")
+            source_face_img.save(src_path)
+            print(f"   Face Swap 소스 얼굴 저장: {os.path.basename(src_path)}")
 
         try:
             swapped = self.face_swapper.swap_face(result_image, source_face_img)
             if swapped is not None:
                 print("   Face Swap 완료!")
+                # 디버깅: Face Swap 결과 저장
+                if run_folder:
+                    swap_result_path = os.path.join(run_folder, "6.1_faceswap_result.png")
+                    swapped.save(swap_result_path)
+                    print(f"   Face Swap 결과 저장: {os.path.basename(swap_result_path)}")
                 return swapped
             else:
                 print("   ⚠️ Face Swap 실패, 원본 결과 반환")
@@ -726,6 +941,191 @@ class AutoIDPhotoCompositor:
         except Exception as e:
             print(f"   ⚠️ Face Swap 오류: {e}")
             return result_image
+
+    def _apply_face_enhance(
+        self,
+        result_image: Image.Image,
+        strength: float = 0.8,
+        run_folder: str = None
+    ) -> Image.Image:
+        """
+        GFPGAN으로 얼굴 화질 개선
+
+        Args:
+            result_image: 입력 이미지 (PIL Image)
+            strength: 개선 강도 (0.0=원본, 1.0=완전 개선)
+            run_folder: 중간 결과 저장 폴더 (디버깅용)
+
+        Returns:
+            화질 개선된 이미지 (PIL Image)
+        """
+        print("\n🔧 Face Enhance (GFPGAN) 적용 중...")
+
+        if self.face_enhancer is None:
+            print("   ⚠️ FaceEnhancer가 초기화되지 않음, 원본 반환")
+            return result_image
+
+        try:
+            if strength >= 1.0:
+                # 완전 개선
+                enhanced = self.face_enhancer.enhance(result_image, only_center_face=True, paste_back=True)
+            else:
+                # 부분 블렌딩
+                enhanced = self.face_enhancer.enhance_face_region(result_image, blend_ratio=strength)
+
+            if enhanced is not None:
+                print(f"   Face Enhance 완료! (강도: {strength:.0%})")
+                # 디버깅: Face Enhance 결과 저장
+                if run_folder:
+                    enhance_result_path = os.path.join(run_folder, "6.2_face_enhance_result.png")
+                    enhanced.save(enhance_result_path)
+                    print(f"   Face Enhance 결과 저장: {os.path.basename(enhance_result_path)}")
+                return enhanced
+            else:
+                print("   ⚠️ Face Enhance 실패, 원본 결과 반환")
+                return result_image
+        except Exception as e:
+            print(f"   ⚠️ Face Enhance 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return result_image
+
+    def _apply_swap_refinement(
+        self,
+        swapped_image: Image.Image,
+        prompt: str,
+        denoising_strength: float = 0.3,
+        guidance_scale: float = 7.5,
+        num_steps: int = 20,
+        seed: int = None,
+        run_folder: str = None
+    ) -> Image.Image:
+        """
+        Face Swap 후 얼굴 영역에 경미한 인페인팅으로 자연스럽게 블렌딩
+
+        Face Swap은 얼굴을 교체하지만 경계가 부자연스러울 수 있음.
+        이 메서드는 얼굴 영역에만 낮은 denoising으로 가볍게 인페인팅하여
+        자연스러운 블렌딩을 달성함.
+
+        Args:
+            swapped_image: Face Swap이 적용된 이미지 (PIL Image)
+            prompt: 인페인팅 프롬프트
+            denoising_strength: Denoising 강도 (0.1~0.5 권장, 낮을수록 원본 유지)
+            guidance_scale: 가이던스 스케일
+            num_steps: 추론 스텝 수 (빠른 정제를 위해 적은 스텝 사용)
+            seed: 랜덤 시드
+            run_folder: 중간 결과 저장 폴더 (디버깅용)
+
+        Returns:
+            정제된 이미지 (PIL Image)
+        """
+        print(f"\n🔧 Face Swap Refinement 적용 중... (denoising: {denoising_strength:.2f})")
+
+        # 파이프라인이 없으면 원본 반환
+        if not self.has_ip_adapter and not self.no_ip_adapter:
+            print("   ⚠️ 인페인팅 파이프라인이 없습니다.")
+            return swapped_image
+
+        # BiSeNet으로 얼굴 마스크 생성
+        if self.face_parser is None:
+            print("   ⚠️ BiSeNet이 없어 전체 이미지 리파인먼트를 수행합니다.")
+            # BiSeNet이 없으면 간단한 중앙 영역 마스크 사용
+            w, h = swapped_image.size
+            mask = Image.new("L", (w, h), 0)
+            # 중앙 60% 영역에 마스크
+            margin_x = int(w * 0.2)
+            margin_y = int(h * 0.15)
+            for y in range(margin_y, h - margin_y):
+                for x in range(margin_x, w - margin_x):
+                    mask.putpixel((x, y), 255)
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=30))
+        else:
+            try:
+                # BiSeNet으로 정확한 얼굴 마스크 생성 (얼굴만, 머리카락 제외)
+                face_mask = self.face_parser.get_face_hair_mask(
+                    swapped_image,
+                    include_hair=False,  # 머리카락 제외 (얼굴만)
+                    include_neck=False,
+                    blur_radius=10,
+                    expand_ratio=1.15  # 약간 확장
+                )
+                if face_mask is not None:
+                    mask = face_mask
+                else:
+                    raise ValueError("BiSeNet failed to generate mask")
+            except Exception as e:
+                print(f"   ⚠️ 마스크 생성 실패: {e}, 중앙 영역 마스크 사용")
+                w, h = swapped_image.size
+                mask = Image.new("L", (w, h), 0)
+                margin_x = int(w * 0.2)
+                margin_y = int(h * 0.15)
+                for y in range(margin_y, h - margin_y):
+                    for x in range(margin_x, w - margin_x):
+                        mask.putpixel((x, y), 255)
+                mask = mask.filter(ImageFilter.GaussianBlur(radius=30))
+
+        # 마스크 저장 (디버깅용)
+        if run_folder:
+            refinement_mask_path = os.path.join(run_folder, "6.3_swap_refinement_mask.png")
+            mask.save(refinement_mask_path)
+            print(f"   Refinement 마스크 저장: {os.path.basename(refinement_mask_path)}")
+
+        # Generator 설정
+        if seed is not None:
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+        else:
+            generator = None
+
+        try:
+            # IP-Adapter가 로드된 경우, 제로 임베딩 전달 (정제 시에는 IP-Adapter 영향 없이)
+            pipeline_kwargs = {
+                "prompt": prompt,
+                "image": swapped_image,
+                "mask_image": mask,
+                "num_inference_steps": num_steps,
+                "guidance_scale": guidance_scale,
+                "strength": denoising_strength,
+                "generator": generator,
+            }
+
+            # IP-Adapter가 로드된 상태면 임베딩 필요
+            if self.has_ip_adapter:
+                # IP-Adapter scale을 0으로 설정하여 영향 제거
+                original_scale = self.pipeline.get_ip_adapter_scale() if hasattr(self.pipeline, 'get_ip_adapter_scale') else None
+                self.pipeline.set_ip_adapter_scale(0.0)
+
+                # 제로 임베딩 전달 (FaceID Plus v2: shape (2, 1, 512))
+                zero_embedding = torch.zeros(2, 1, 512, dtype=self.dtype, device=self.device)
+                pipeline_kwargs["ip_adapter_image_embeds"] = [zero_embedding]
+
+            # 인페인팅 수행 (낮은 denoising으로 가벼운 정제)
+            result = self.pipeline(**pipeline_kwargs)
+
+            # IP-Adapter scale 복원
+            if self.has_ip_adapter and original_scale is not None:
+                self.pipeline.set_ip_adapter_scale(original_scale)
+
+            refined_image = result.images[0]
+
+            # 크기가 다르면 복원
+            if refined_image.size != swapped_image.size:
+                refined_image = refined_image.resize(swapped_image.size, Image.Resampling.LANCZOS)
+
+            print(f"   Swap Refinement 완료!")
+
+            # 결과 저장 (디버깅용)
+            if run_folder:
+                refinement_result_path = os.path.join(run_folder, "6.4_swap_refinement_result.png")
+                refined_image.save(refinement_result_path)
+                print(f"   Refinement 결과 저장: {os.path.basename(refinement_result_path)}")
+
+            return refined_image
+
+        except Exception as e:
+            print(f"   ⚠️ Swap Refinement 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return swapped_image
 
     def _create_face_hair_composite(
         self,
@@ -979,7 +1379,11 @@ class AutoIDPhotoCompositor:
         save_preview=False,
         use_pre_paste=None,
         pre_paste_denoising=0.65,
-        use_face_swap=None
+        use_face_swap=None,
+        use_face_enhance=None,
+        face_enhance_strength=0.8,
+        use_swap_refinement=None,
+        swap_refinement_strength=0.3
     ):
         """
         자동 얼굴 합성 (머리카락/목 포함)
@@ -1008,6 +1412,10 @@ class AutoIDPhotoCompositor:
             use_pre_paste: Pre-paste 사용 여부 (None이면 클래스 설정 사용)
             pre_paste_denoising: Pre-paste 시 denoising strength (기본: 0.65)
             use_face_swap: Face Swap 사용 여부 (None이면 클래스 설정 사용)
+            use_face_enhance: Face Enhance 사용 여부 (None이면 클래스 설정 사용)
+            face_enhance_strength: Face Enhance 강도 (0.0~1.0, 기본: 0.8)
+            use_swap_refinement: Face Swap Refinement 사용 여부 (None이면 클래스 설정 사용)
+            swap_refinement_strength: Swap Refinement 강도 (0.1~0.5, 기본: 0.3)
 
         Returns:
             합성된 이미지 (PIL Image)
@@ -1016,9 +1424,11 @@ class AutoIDPhotoCompositor:
             print("IP-Adapter가 필요합니다!")
             return None
 
-        # Pre-paste / Face Swap 플래그 해결 (None이면 클래스 설정 사용)
+        # Pre-paste / Face Swap / Face Enhance / Swap Refinement 플래그 해결 (None이면 클래스 설정 사용)
         apply_pre_paste = use_pre_paste if use_pre_paste is not None else self.use_pre_paste
         apply_face_swap = use_face_swap if use_face_swap is not None else self.use_face_swap
+        apply_face_enhance = use_face_enhance if use_face_enhance is not None else self.use_face_enhance
+        apply_swap_refinement = use_swap_refinement if use_swap_refinement is not None else self.use_swap_refinement
 
         # Pre-paste 시 denoising strength 자동 조정
         actual_denoising = denoising_strength
@@ -1039,6 +1449,10 @@ class AutoIDPhotoCompositor:
             mode_str += " + Pre-paste"
         if apply_face_swap:
             mode_str += " + Face Swap"
+        if apply_swap_refinement:
+            mode_str += " + Swap Refinement"
+        if apply_face_enhance:
+            mode_str += " + Face Enhance"
         print(mode_str)
         print("=" * 70)
 
@@ -1098,13 +1512,14 @@ class AutoIDPhotoCompositor:
                 background_img,
                 source_face,
                 target_bbox=None,
-                blend_mode="seamless"
+                blend_mode="seamless",
+                run_folder=run_folder if save_mask else None
             )
-            # Pre-paste 결과 저장 (디버깅용)
+            # Pre-paste 최종 결과 저장 (디버깅용)
             if save_mask and run_folder:
-                pre_paste_path = os.path.join(run_folder, "2.5_pre_paste.png")
+                pre_paste_path = os.path.join(run_folder, "2.6_prepaste_final_result.png")
                 background_img.save(pre_paste_path)
-                print(f"   Pre-paste 결과 저장: {os.path.basename(pre_paste_path)}")
+                print(f"   Pre-paste 최종 결과 저장: {os.path.basename(pre_paste_path)}")
 
         # 3. 배경에서 얼굴 자동 감지 + 마스크 생성
         print("\n배경에서 얼굴 마스크 자동 생성...")
@@ -1224,7 +1639,12 @@ class AutoIDPhotoCompositor:
 
         ip_adapter_kwargs = {}
 
-        if self.use_clip_blend:
+        if self.no_ip_adapter:
+            # Simple Inpainting 모드: IP-Adapter 없이 순수 인페인팅만
+            print("   Simple Inpainting: IP-Adapter 사용 안함 (순수 인페인팅)")
+            # ip_adapter_kwargs는 비워둠
+
+        elif self.use_clip_blend:
             # CLIP Blending 모드: 픽셀 레벨 얼굴/머리카락 블렌딩 후 CLIP 인코딩
             print("   CLIP Blending: 픽셀 레벨 블렌딩...")
             self.pipeline.set_ip_adapter_scale(face_strength)
@@ -1435,8 +1855,10 @@ class AutoIDPhotoCompositor:
             # 2. 진행률 계산
             progress = cur_step / num_inference_steps
 
-            # 3. Stop-At 로직 적용 & 로그 출력
-            if progress > stop_at:
+            # 3. Stop-At 로직 적용 & 로그 출력 (no_ip_adapter 모드면 건너뛰기)
+            if self.no_ip_adapter:
+                status_msg = "Simple Inpainting (IP-Adapter 없음)"
+            elif progress > stop_at:
                 # 지정된 구간을 넘었을 때 -> 얼굴 반영 끄기
                 pipe.set_ip_adapter_scale(0.0)
                 status_msg = f"🛑 OFF (Scale: 0.0)"
@@ -1446,7 +1868,7 @@ class AutoIDPhotoCompositor:
                 status_msg = f"✅ ON  (Scale: {face_strength})"
 
             # 매 스텝마다 로그 출력
-            print(f"   [Step {cur_step:02d}/{num_inference_steps}] 진행률 {progress*100:.0f}% -> FaceID: {status_msg}", flush=True)
+            print(f"   [Step {cur_step:02d}/{num_inference_steps}] 진행률 {progress*100:.0f}% -> {status_msg}", flush=True)
 
             # 4. Preview 이미지 생성 (5 스텝마다)
             if hasattr(self, 'save_preview') and self.save_preview and cur_step > 0 and cur_step % 5 == 0:
@@ -1470,6 +1892,10 @@ class AutoIDPhotoCompositor:
 
                         # stdout에 preview 경로 출력 (백엔드가 파싱함)
                         print(f"PREVIEW:{preview_path}", flush=True)
+
+                        # 중간 텐서 정리 (메모리 누적 방지)
+                        del latents_scaled, image_tensor
+                        torch.cuda.empty_cache()
                 except Exception as e:
                     print(f"   Preview 생성 실패 (Step {cur_step}): {e}")
 
@@ -1499,17 +1925,54 @@ class AutoIDPhotoCompositor:
 
         # 10. Face Swap 적용 (선택적)
         if apply_face_swap:
-            output_image = self._apply_face_swap(output_image, source_face)
-            # Face Swap 전 결과 저장 (디버깅용)
+            # Face Swap 전 결과 저장 (디버깅용) - swap 전에 저장!
             if save_mask and run_folder:
-                pre_swap_path = os.path.join(run_folder, "5_result_before_swap.png")
-                result.images[0].save(pre_swap_path)
+                pre_swap_path = os.path.join(run_folder, "5.5_result_before_swap.png")
+                output_image.save(pre_swap_path)
                 print(f"   Face Swap 전 결과 저장: {os.path.basename(pre_swap_path)}")
+
+            output_image = self._apply_face_swap(output_image, source_face, run_folder if save_mask else None)
+
+            # 10.2. Face Swap Refinement 적용 (선택적)
+            if apply_swap_refinement:
+                # Swap Refinement 전 저장 (디버깅용)
+                if save_mask and run_folder:
+                    pre_refine_path = os.path.join(run_folder, "5.6_result_before_refinement.png")
+                    output_image.save(pre_refine_path)
+                    print(f"   Swap Refinement 전 결과 저장: {os.path.basename(pre_refine_path)}")
+
+                output_image = self._apply_swap_refinement(
+                    output_image,
+                    prompt=prompt,
+                    denoising_strength=swap_refinement_strength,
+                    guidance_scale=guidance_scale,
+                    num_steps=max(15, num_inference_steps // 3),  # 메인 스텝의 1/3 정도 사용
+                    seed=seed,
+                    run_folder=run_folder if save_mask else None
+                )
+
+        # 10.5. Face Enhance 적용 (선택적 - GFPGAN)
+        if apply_face_enhance:
+            # Face Enhance 전 결과 저장 (디버깅용)
+            if save_mask and run_folder:
+                pre_enhance_path = os.path.join(run_folder, "5.7_result_before_enhance.png")
+                output_image.save(pre_enhance_path)
+                print(f"   Face Enhance 전 결과 저장: {os.path.basename(pre_enhance_path)}")
+
+            output_image = self._apply_face_enhance(
+                output_image,
+                strength=face_enhance_strength,
+                run_folder=run_folder if save_mask else None
+            )
 
         # 11. 저장
         output_image.save(output_path)
         print(f"\n✅ 완료! 저장됨: {output_path}")
         print("=" * 70)
+
+        # 12. GPU 메모리 정리 (메모리 누적 방지)
+        cleanup_gpu_memory()
+        print("🧹 GPU 메모리 정리 완료")
 
         return output_image
 
@@ -1639,6 +2102,8 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
                        help='BiSeNet 비활성화 (타원 마스크만 사용)')
     parser.add_argument('--no-gender-detect', action='store_true',
                        help='성별 자동 감지 비활성화')
+    parser.add_argument('--no-ip-adapter', action='store_true',
+                       help='IP-Adapter 없이 순수 인페인팅만 수행 (Pre-paste와 함께 사용 권장)')
     parser.add_argument('--use-faceid', action='store_true',
                        help='IP-Adapter FaceID 사용 (InsightFace 기반, 정체성 보존 향상)')
     parser.add_argument('--use-faceid-plus', action='store_true',
@@ -1662,7 +2127,18 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
     parser.add_argument('--pre-paste-denoising', type=float, default=0.65,
                        help='Pre-paste 시 denoising strength (기본: 0.65)')
     parser.add_argument('--use-face-swap', action='store_true',
-                       help='Face Swap 모드: 생성 후 InsightFace inswapper로 얼굴 교체 (유사도 향상)')
+                       help='Face Swap 모드: 생성 후 얼굴 교체 (유사도 향상)')
+    parser.add_argument('--face-swap-model', type=str, default='insightface',
+                       choices=['insightface', 'ghost'],
+                       help='Face Swap 모델 선택: insightface (빠름), ghost (고화질, 기본: insightface)')
+    parser.add_argument('--use-face-enhance', action='store_true',
+                       help='Face Enhance 모드: GFPGAN으로 얼굴 화질 개선')
+    parser.add_argument('--face-enhance-strength', type=float, default=0.8,
+                       help='Face Enhance 강도 (0.0~1.0, 기본: 0.8)')
+    parser.add_argument('--use-swap-refinement', action='store_true',
+                       help='Face Swap Refinement: Face Swap 후 얼굴 영역 경미한 인페인팅으로 자연스럽게 블렌딩')
+    parser.add_argument('--swap-refinement-strength', type=float, default=0.3,
+                       help='Swap Refinement 강도 (0.1~0.5, 기본: 0.3, 낮을수록 원본 유지)')
     parser.add_argument('--show', action='store_true',
                        help='결과 표시')
 
@@ -1688,10 +2164,15 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
         use_dual_adapter=args.use_dual_adapter,
         use_clip_blend=args.use_clip_blend,
         use_pre_paste=args.use_pre_paste,
-        use_face_swap=args.use_face_swap
+        use_face_swap=args.use_face_swap,
+        use_face_enhance=args.use_face_enhance,
+        use_swap_refinement=args.use_swap_refinement,
+        no_ip_adapter=args.no_ip_adapter,
+        face_swap_model=args.face_swap_model
     )
 
-    if not compositor.has_ip_adapter:
+    # no_ip_adapter 모드가 아닐 때만 IP-Adapter 체크
+    if not args.no_ip_adapter and not compositor.has_ip_adapter:
         print("\nIP-Adapter 로딩 실패")
         print("   pip install diffusers transformers accelerate")
         return
@@ -1755,7 +2236,11 @@ python id_photo_face_composite_auto.py background.jpg face.jpg \\
         save_preview=args.save_preview,
         use_pre_paste=args.use_pre_paste,
         pre_paste_denoising=args.pre_paste_denoising,
-        use_face_swap=args.use_face_swap
+        use_face_swap=args.use_face_swap,
+        use_face_enhance=args.use_face_enhance,
+        face_enhance_strength=args.face_enhance_strength,
+        use_swap_refinement=args.use_swap_refinement,
+        swap_refinement_strength=args.swap_refinement_strength
     )
 
     # 파라미터 저장

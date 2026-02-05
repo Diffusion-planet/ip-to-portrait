@@ -126,8 +126,8 @@ class PipelineService:
         else:
             background_path = self._get_background_path()
 
-        # Use Celery for parallel processing when enabled
-        if settings.USE_CELERY and parallel and len(task_ids) > 1:
+        # Use Celery when enabled (for proper GPU worker distribution)
+        if settings.USE_CELERY:
             await self._run_celery_batch(
                 batch_id=batch_id,
                 face_image_id=face_image_id,
@@ -536,7 +536,10 @@ class PipelineService:
             cmd.extend(["--prompt", params.prompt])
 
         # Add adapter mode
-        if params.adapter_mode == "faceid":
+        if params.adapter_mode == "none":
+            # Simple inpainting without IP-Adapter (just harmonize)
+            cmd.append("--no-ip-adapter")
+        elif params.adapter_mode == "faceid":
             cmd.append("--use-faceid")
         elif params.adapter_mode == "faceid_plus":
             cmd.append("--use-faceid-plus")
@@ -547,12 +550,22 @@ class PipelineService:
             cmd.append("--use-clip-blend")
             cmd.extend(["--face-blend-weight", str(params.face_blend_weight)])
             cmd.extend(["--hair-blend-weight", str(params.hair_blend_weight)])
+        # 'standard' mode uses default CLIP IP-Adapter (no extra flag needed)
 
         # Add mask flags
         if not params.include_hair:
             cmd.append("--no-hair")
         if params.include_neck:
             cmd.append("--include-neck")
+
+        # Pre-paste mode (소스 얼굴 미리 붙여넣기)
+        if params.use_pre_paste:
+            cmd.append("--use-pre-paste")
+            cmd.extend(["--pre-paste-denoising", str(params.pre_paste_denoising)])
+
+        # Face Swap mode (생성 후 얼굴 교체)
+        if params.use_face_swap:
+            cmd.append("--use-face-swap")
 
         # Enable preview generation
         cmd.append("--save-preview")
@@ -686,18 +699,17 @@ class PipelineService:
 
                     print(f"[Pipeline] Looking for result in: {recent_folder}")
 
-                    # Look for final result image (not preview)
-                    for img_file in recent_folder.glob("*.png"):
-                        if ("result" in img_file.name or "output" in img_file.name) and "preview" not in img_file.name:
-                            print(f"[Pipeline] Copying result: {img_file} -> {output_path}")
-                            shutil.copy(img_file, output_path)
-                            break
+                    # Look for final result image - specifically 5_result.png (the actual output)
+                    final_result = recent_folder / "5_result.png"
+                    if final_result.exists():
+                        print(f"[Pipeline] Copying result: {final_result} -> {output_path}")
+                        shutil.copy(final_result, output_path)
                     else:
-                        # If no result/output file, copy the first PNG
-                        png_files = list(recent_folder.glob("*.png"))
-                        if png_files:
-                            print(f"[Pipeline] Copying first PNG: {png_files[0]} -> {output_path}")
-                            shutil.copy(png_files[0], output_path)
+                        # Pipeline didn't complete - don't return intermediate files as final result
+                        print(f"[Pipeline] ERROR: Final result (5_result.png) not found in {recent_folder}")
+                        print(f"[Pipeline] Available files: {list(recent_folder.glob('*.png'))}")
+                        # Don't copy prepaste or other intermediate files as the result
+                        raise Exception("Pipeline did not complete - final result not generated")
 
         return output_path if output_path.exists() else None
 

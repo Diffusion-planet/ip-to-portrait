@@ -122,7 +122,10 @@ def generate_image(
 
         # Add adapter mode
         adapter_mode = params.get('adapter_mode', 'faceid_plus')
-        if adapter_mode == "faceid":
+        if adapter_mode == "none":
+            # Simple inpainting without IP-Adapter (just harmonize)
+            cmd.append("--no-ip-adapter")
+        elif adapter_mode == "faceid":
             cmd.append("--use-faceid")
         elif adapter_mode == "faceid_plus":
             cmd.append("--use-faceid-plus")
@@ -133,6 +136,7 @@ def generate_image(
             cmd.append("--use-clip-blend")
             cmd.extend(["--face-blend-weight", str(params.get('face_blend_weight', 0.8))])
             cmd.extend(["--hair-blend-weight", str(params.get('hair_blend_weight', 0.2))])
+        # 'standard' mode uses default CLIP IP-Adapter (no extra flag needed)
 
         # Add mask flags
         if not params.get('include_hair', True):
@@ -148,11 +152,26 @@ def generate_image(
         # Face Swap mode (생성 후 얼굴 교체)
         if params.get('use_face_swap', False):
             cmd.append("--use-face-swap")
+            face_swap_model = params.get('face_swap_model', 'insightface')
+            cmd.extend(["--face-swap-model", face_swap_model])
+
+        # Face Enhance mode (GFPGAN 얼굴 화질 개선)
+        if params.get('use_face_enhance', False):
+            cmd.append("--use-face-enhance")
+            cmd.extend(["--face-enhance-strength", str(params.get('face_enhance_strength', 0.8))])
+
+        # Face Swap Refinement mode (Face Swap 후 자연스러운 블렌딩)
+        if params.get('use_swap_refinement', False):
+            cmd.append("--use-swap-refinement")
+            cmd.extend(["--swap-refinement-strength", str(params.get('swap_refinement_strength', 0.3))])
 
         # Enable preview generation
         cmd.append("--save-preview")
 
-        print(f"[Celery Worker] Running task {task_id}: {' '.join(cmd)}")
+        # Log GPU assignment for debugging
+        gpu_id = os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')
+        print(f"[Celery Worker] Running task {task_id} on GPU {gpu_id}")
+        print(f"[Celery Worker] Command: {' '.join(cmd)}")
 
         # Update task state
         self.update_state(
@@ -160,9 +179,11 @@ def generate_image(
             meta={'task_id': task_id, 'progress': 0, 'message': 'Starting generation...'}
         )
 
-        # Run subprocess
+        # Run subprocess - inherit worker's CUDA_VISIBLE_DEVICES
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
+        # Ensure GPU assignment is logged
+        print(f"[Celery Worker] Subprocess CUDA_VISIBLE_DEVICES={env.get('CUDA_VISIBLE_DEVICES', 'not set')}")
 
         process = subprocess.Popen(
             cmd,
