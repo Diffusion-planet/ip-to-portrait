@@ -64,6 +64,22 @@ interface InpaintingParams {
   faceBlendWeight: number
   hairBlendWeight: number
 
+  // Pre-paste settings
+  usePrePaste: boolean
+  prePasteDenoising: number
+
+  // Face Swap settings
+  useFaceSwap: boolean
+  faceSwapModel: 'insightface' | 'ghost'
+
+  // Face Enhance settings (GFPGAN)
+  useFaceEnhance: boolean
+  faceEnhanceStrength: number
+
+  // Face Swap Refinement settings
+  useSwapRefinement: boolean
+  swapRefinementStrength: number
+
   // Auto prompt
   autoPrompt: boolean
 }
@@ -100,6 +116,14 @@ const DEFAULT_PARAMS: InpaintingParams = {
   shortcutScale: 1.0,
   faceBlendWeight: 0.6,
   hairBlendWeight: 0.4,
+  usePrePaste: false,
+  prePasteDenoising: 0.65,
+  useFaceSwap: false,
+  faceSwapModel: 'insightface',
+  useFaceEnhance: false,
+  faceEnhanceStrength: 0.8,
+  useSwapRefinement: false,
+  swapRefinementStrength: 0.3,
   autoPrompt: false,
 }
 
@@ -107,13 +131,21 @@ const DEFAULT_PARAMS: InpaintingParams = {
 const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'LR') => {
   const dagreGraph = new dagre.graphlib.Graph()
   dagreGraph.setDefaultEdgeLabel(() => ({}))
-  dagreGraph.setGraph({ rankdir: direction, nodesep: 100, ranksep: 200 })
+  dagreGraph.setGraph({ rankdir: direction, nodesep: 120, ranksep: 250 })
+
+  // Node dimensions - keep in sync with actual component sizes
+  const NODE_SIZES: Record<string, { width: number; height: number }> = {
+    inpaintingParams: { width: 1200, height: 650 },  // 3-column layout
+    results: { width: 600, height: 500 },
+    prompt: { width: 500, height: 300 },
+    generationControl: { width: 480, height: 400 },
+    referenceImage: { width: 480, height: 520 },
+    faceImage: { width: 480, height: 520 },
+  }
 
   nodes.forEach((node) => {
-    // Estimate node dimensions based on type
-    const width = node.type === 'inpaintingParams' ? 1000 : node.type === 'results' ? 600 : node.type === 'prompt' ? 500 : 480
-    const height = node.type === 'inpaintingParams' ? 1000 : node.type === 'results' ? 500 : node.type === 'prompt' ? 300 : 520
-    dagreGraph.setNode(node.id, { width, height })
+    const size = NODE_SIZES[node.type || ''] || { width: 480, height: 520 }
+    dagreGraph.setNode(node.id, { width: size.width, height: size.height })
   })
 
   edges.forEach((edge) => {
@@ -373,6 +405,14 @@ function HomePageContent() {
                     include_neck: params.includeNeck,
                     stop_at: params.stopAt,
                     shortcut_scale: params.shortcutScale,
+                    use_pre_paste: params.usePrePaste,
+                    pre_paste_denoising: params.prePasteDenoising,
+                    use_face_swap: params.useFaceSwap,
+                    face_swap_model: params.faceSwapModel,
+                    use_face_enhance: params.useFaceEnhance,
+                    face_enhance_strength: params.faceEnhanceStrength,
+                    use_swap_refinement: params.useSwapRefinement,
+                    swap_refinement_strength: params.swapRefinementStrength,
                     auto_prompt: autoPrompt,
                   },
                   count,
@@ -476,6 +516,14 @@ function HomePageContent() {
         shortcut_scale: params.shortcutScale,
         face_blend_weight: params.faceBlendWeight,
         hair_blend_weight: params.hairBlendWeight,
+        use_pre_paste: params.usePrePaste,
+        pre_paste_denoising: params.prePasteDenoising,
+        use_face_swap: params.useFaceSwap,
+        face_swap_model: params.faceSwapModel,
+        use_face_enhance: params.useFaceEnhance,
+        face_enhance_strength: params.faceEnhanceStrength,
+        use_swap_refinement: params.useSwapRefinement,
+        swap_refinement_strength: params.swapRefinementStrength,
         auto_prompt: autoPrompt,
       },
       count,
@@ -567,6 +615,14 @@ function HomePageContent() {
         shortcutScale: item.params.shortcut_scale || DEFAULT_PARAMS.shortcutScale,
         faceBlendWeight: item.params.face_blend_weight || DEFAULT_PARAMS.faceBlendWeight,
         hairBlendWeight: item.params.hair_blend_weight || DEFAULT_PARAMS.hairBlendWeight,
+        usePrePaste: item.params.use_pre_paste ?? DEFAULT_PARAMS.usePrePaste,
+        prePasteDenoising: item.params.pre_paste_denoising || DEFAULT_PARAMS.prePasteDenoising,
+        useFaceSwap: item.params.use_face_swap ?? DEFAULT_PARAMS.useFaceSwap,
+        faceSwapModel: item.params.face_swap_model || DEFAULT_PARAMS.faceSwapModel,
+        useFaceEnhance: item.params.use_face_enhance ?? DEFAULT_PARAMS.useFaceEnhance,
+        faceEnhanceStrength: item.params.face_enhance_strength || DEFAULT_PARAMS.faceEnhanceStrength,
+        useSwapRefinement: item.params.use_swap_refinement ?? DEFAULT_PARAMS.useSwapRefinement,
+        swapRefinementStrength: item.params.swap_refinement_strength || DEFAULT_PARAMS.swapRefinementStrength,
         autoPrompt: item.params.auto_prompt ?? DEFAULT_PARAMS.autoPrompt,
       })
     }

@@ -41,6 +41,22 @@ class GenerationParams(BaseModel):
     include_hair: bool = Field(default=True, description="Include hair in mask")
     include_neck: bool = Field(default=False, description="Include neck in mask")
 
+    # Pre-paste settings
+    use_pre_paste: bool = Field(default=False, description="Pre-paste source face before inpainting")
+    pre_paste_denoising: float = Field(default=0.65, ge=0.3, le=0.9, description="Denoising strength when pre-paste is enabled")
+
+    # Face Swap settings
+    use_face_swap: bool = Field(default=False, description="Apply face swap after generation")
+    face_swap_model: str = Field(default="insightface", description="Face swap model: insightface (fast) or ghost (high quality)")
+
+    # Face Enhance settings (GFPGAN)
+    use_face_enhance: bool = Field(default=False, description="Apply GFPGAN face enhancement after generation")
+    face_enhance_strength: float = Field(default=0.8, ge=0.0, le=1.0, description="Face enhance strength (0=original, 1=full enhance)")
+
+    # Face Swap Refinement settings
+    use_swap_refinement: bool = Field(default=False, description="Apply light inpainting after Face Swap for natural blending")
+    swap_refinement_strength: float = Field(default=0.3, ge=0.1, le=0.5, description="Swap refinement strength (lower=more original preserved)")
+
     # Prompt settings
     auto_prompt: bool = Field(default=False, description="Auto-generate prompt with Gemini Vision")
 

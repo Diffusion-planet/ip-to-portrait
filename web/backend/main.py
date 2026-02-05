@@ -2,6 +2,17 @@
 FastAPI backend for IP-to-Portrait inpainting pipeline
 """
 
+import os
+from pathlib import Path
+
+# Load .env file from project root
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"✅ Loaded .env from {env_path}")
+    print(f"   CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES', 'not set')}")
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, Request, Response
 from fastapi.middleware.cors import CORSMiddleware

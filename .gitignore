@@ -18,6 +18,9 @@ __pycache__/
 # Model cache
 models_cache/
 
+# Downloaded model weights
+models/ghost/
+
 # Environment variables
 .env
 
@@ -44,3 +47,9 @@ node_modules/
 
 # Claude extension settings
 .claude/
+
+# External model repositories (cloned via setup scripts)
+gfpgan/
+ghost/
+
+logs/
