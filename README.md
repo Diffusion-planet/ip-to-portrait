@@ -16,7 +16,12 @@
   <img src="https://img.shields.io/badge/SDXL-Inpainting-blue?style=for-the-badge" alt="SDXL Inpainting" />
   <img src="https://img.shields.io/badge/IP--Adapter-FaceID%20Plus%20v2-green?style=for-the-badge" alt="IP-Adapter" />
   <img src="https://img.shields.io/badge/BiSeNet-Face%20Parsing-orange?style=for-the-badge" alt="BiSeNet" />
-  <img src="https://img.shields.io/badge/InsightFace-Face%20Embedding-red?style=for-the-badge" alt="InsightFace" />
+  <img src="https://img.shields.io/badge/InsightFace-Face%20Swap-red?style=for-the-badge" alt="InsightFace" />
+  <img src="https://img.shields.io/badge/GFPGAN-Face%20Enhance-FF6B6B?style=for-the-badge" alt="GFPGAN" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/CLIP-ViT--H%2F14-9B59B6?style=for-the-badge" alt="CLIP" />
   <img src="https://img.shields.io/badge/Gemini-2.5%20Flash-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white" alt="Gemini" />
 </p>
 
@@ -48,7 +53,15 @@ IP-to-Portrait는 레퍼런스 이미지의 얼굴을 교체하면서 원본 배
 
 ### 작동 원리
 
-레퍼런스 이미지(배경/포즈 유지), 얼굴 이미지(정체성 주입), 프롬프트(텍스트 가이드)를 입력받아 IP-Adapter + SDXL Inpainting을 통해 최종 결과를 생성한다.
+```
+INPUT → PREPROCESSING → GENERATION → POST-PROCESSING → OUTPUT
+```
+
+1. **INPUT**: 레퍼런스 이미지(배경/포즈), 얼굴 이미지(정체성), 프롬프트(텍스트 가이드) 입력
+2. **PREPROCESSING**: InsightFace로 얼굴 감지 → BiSeNet으로 파싱 → 마스크 생성 → 임베딩 추출
+3. **GENERATION**: IP-Adapter FaceID Plus v2로 얼굴 임베딩 주입 → RealVisXL로 인페인팅
+4. **POST-PROCESSING**: Face Swap으로 얼굴 유사도 향상 → GFPGAN으로 화질 개선
+5. **OUTPUT**: 최종 합성 결과 (WebSocket 실시간 미리보기)
 
 ---
 
@@ -58,6 +71,8 @@ IP-to-Portrait는 레퍼런스 이미지의 얼굴을 교체하면서 원본 배
 |------|------|
 | **배경 완벽 보존** | 인페인팅 마스크가 얼굴 영역만 타겟팅하여 배경 유지 |
 | **정체성 보존** | IP-Adapter FaceID Plus v2가 InsightFace 임베딩과 CLIP 특징 결합 |
+| **Face Swap** | InsightFace inswapper_128로 생성된 얼굴을 소스 얼굴로 교체하여 유사도 향상 |
+| **Face Enhance** | GFPGAN v1.4로 얼굴 화질 향상 및 복원 |
 | **헤어스타일 전이** | CLIP 이미지 임베딩이 헤어스타일 특성 캡처 및 전이 |
 | **정밀 얼굴 파싱** | BiSeNet이 얼굴, 머리카락, 목 영역을 픽셀 수준으로 세그멘테이션 |
 | **자동 프롬프트 생성** | Gemini 2.5 Flash VLM이 얼굴 이미지를 분석하여 설명적 프롬프트 생성 |
@@ -1117,8 +1132,9 @@ docker-compose up -d --scale celery-worker=4
 ![SDXL](https://img.shields.io/badge/SDXL-Inpainting-blue?style=for-the-badge)
 ![IP-Adapter](https://img.shields.io/badge/IP--Adapter-FaceID%20Plus%20v2-green?style=for-the-badge)
 ![BiSeNet](https://img.shields.io/badge/BiSeNet-Face%20Parsing-orange?style=for-the-badge)
-![InsightFace](https://img.shields.io/badge/InsightFace-antelopev2-red?style=for-the-badge)
-![CLIP](https://img.shields.io/badge/CLIP-ViT--H%2F14-purple?style=for-the-badge)
+![InsightFace](https://img.shields.io/badge/InsightFace-Face%20Swap-red?style=for-the-badge)
+![GFPGAN](https://img.shields.io/badge/GFPGAN-Face%20Enhance-FF6B6B?style=for-the-badge)
+![CLIP](https://img.shields.io/badge/CLIP-ViT--H%2F14-9B59B6?style=for-the-badge)
 ![Google Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)
 
 ### Backend
