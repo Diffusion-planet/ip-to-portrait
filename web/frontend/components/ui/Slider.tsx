@@ -81,22 +81,25 @@ export function Slider({
         <div
           ref={trackRef}
           className={cn(
-            'relative h-1 flex-1 rounded-full cursor-pointer nodrag nopan',
-            'bg-[rgba(255,255,255,0.1)]',
+            'relative h-6 flex-1 rounded-full cursor-pointer nodrag nopan flex items-center',
             disabled && 'opacity-50 cursor-not-allowed'
           )}
           onMouseDown={handleMouseDown}
         >
+          {/* Visual track */}
+          <div className="absolute left-0 right-0 h-1 rounded-full bg-[rgba(255,255,255,0.1)]" />
+          {/* Fill */}
           <div
-            className="absolute top-0 left-0 h-full rounded-full bg-[rgba(255,255,255,0.25)] transition-all pointer-events-none"
+            className="absolute left-0 h-1 rounded-full bg-[rgba(255,255,255,0.25)] transition-all pointer-events-none"
             style={{ width: `${percentage}%` }}
           />
+          {/* Thumb */}
           <div
             className={cn(
-              'absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white shadow-md transition-transform pointer-events-none',
-              isDragging && 'scale-125'
+              'absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-white shadow-md transition-transform pointer-events-none',
+              isDragging && 'scale-110'
             )}
-            style={{ left: `calc(${percentage}% - 6px)` }}
+            style={{ left: `calc(${percentage}% - 10px)` }}
           />
         </div>
         {showValue && (

@@ -552,6 +552,9 @@ class AutoIDPhotoCompositor:
                     subfolder="sdxl_models",
                     weight_name="ip-adapter_sdxl.bin"
                 )
+                # CLIP 인코더 저장 (Standard 모드에서도 필요)
+                self.clip_image_encoder = self.pipeline.image_encoder
+                self.clip_image_processor = self.pipeline.feature_extractor
                 print("Standard IP-Adapter 로딩 완료!")
             return True
         except Exception as e:
@@ -1763,8 +1766,30 @@ class AutoIDPhotoCompositor:
                 print(f"      CLIP 임베딩: {clip_embeds_cfg.shape} (머리스타일 포함)")
 
             else:
-                print("   FaceID Plus v2: 얼굴 검출 실패, 이미지 직접 사용")
-                ip_adapter_kwargs["ip_adapter_image"] = source_face
+                print("   FaceID Plus v2: 얼굴 검출 실패, CLIP 임베딩으로 폴백")
+                # image_encoder가 None이므로 ip_adapter_image 대신 CLIP 임베딩 직접 생성
+                if self.clip_image_encoder is not None:
+                    from transformers import CLIPImageProcessor
+                    clip_processor = CLIPImageProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+                    clip_input = clip_processor(images=source_face, return_tensors="pt").pixel_values.to(self.device, dtype=self.dtype)
+                    clip_output = self.clip_image_encoder(clip_input, output_hidden_states=True)
+                    clip_embeds = clip_output.hidden_states[-2]
+
+                    # Zero face embedding (얼굴 검출 실패)
+                    zero_face = torch.zeros(1, 1, 512, device=self.device, dtype=self.dtype)
+                    neg_face = torch.zeros_like(zero_face)
+                    neg_clip = torch.zeros_like(clip_embeds)
+
+                    face_embedding_cfg = torch.cat([neg_face, zero_face], dim=0)
+                    clip_embeds_cfg = torch.cat([neg_clip, clip_embeds], dim=0)
+                    clip_embeds_cfg = clip_embeds_cfg.unsqueeze(1)
+
+                    self.pipeline.unet.encoder_hid_proj.image_projection_layers[0].clip_embeds = clip_embeds_cfg
+                    self.pipeline.unet.encoder_hid_proj.image_projection_layers[0].shortcut_scale = 1.0
+
+                    ip_adapter_kwargs["ip_adapter_image_embeds"] = [face_embedding_cfg]
+                else:
+                    print("   [Warning] CLIP 인코더도 없음, IP-Adapter 없이 진행")
 
         elif self.use_faceid and self.face_id_extractor is not None:
             # FaceID (non-Plus): InsightFace 512-dim 임베딩 사용
@@ -1791,7 +1816,10 @@ class AutoIDPhotoCompositor:
 
             else:
                 print("   FaceID: 얼굴 검출 실패, Standard 모드로 폴백")
-                ip_adapter_kwargs["ip_adapter_image"] = source_face
+                if self.pipeline.image_encoder is not None:
+                    ip_adapter_kwargs["ip_adapter_image"] = source_face
+                else:
+                    print("   [Warning] image_encoder 없음, IP-Adapter 없이 진행")
 
         else:
             # Standard 모드: 이미지 직접 전달 (CLIP 인코딩)
@@ -1815,7 +1843,10 @@ class AutoIDPhotoCompositor:
                 ip_adapter_input = source_face
                 print("   Standard: 원본 얼굴 이미지 사용")
 
-            ip_adapter_kwargs["ip_adapter_image"] = ip_adapter_input
+            if self.pipeline.image_encoder is not None:
+                ip_adapter_kwargs["ip_adapter_image"] = ip_adapter_input
+            else:
+                print("   [Warning] image_encoder 없음, IP-Adapter 없이 진행")
 
         print("\n합성 시작...")
         print("   배경 유지 + 새 얼굴 합성 중...")

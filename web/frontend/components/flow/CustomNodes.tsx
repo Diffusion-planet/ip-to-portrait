@@ -19,6 +19,7 @@ export function ReferenceImageFlowNode({ data }: NodeProps) {
         imageUrl={data.imageUrl}
         onUpload={data.onUpload}
         onClear={data.onClear}
+        onDemoSelect={data.onDemoSelect}
         isUploading={data.isUploading}
         active={data.active}
       />
