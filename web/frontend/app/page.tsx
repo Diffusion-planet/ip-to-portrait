@@ -12,7 +12,7 @@ import ReactFlow, {
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 import dagre from 'dagre'
-import { TopBar, BottomBar, SideTools, ReportModal } from '@/components/layout'
+import { TopBar, BottomBar, SideTools, ReportModal, DemoReferenceSelector } from '@/components/layout'
 import { ImageModal } from '@/components/Modal'
 import {
   ReferenceImageFlowNode,
@@ -228,6 +228,7 @@ function HomePageContent() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalImageUrl, setModalImageUrl] = useState('')
   const [showReport, setShowReport] = useState(false)
+  const [showDemoSelector, setShowDemoSelector] = useState(false)
 
   // Node position history for undo/redo
   const [positionHistory, setPositionHistory] = useState<Array<Record<string, { x: number; y: number }>>>([])
@@ -445,6 +446,11 @@ function HomePageContent() {
       setReferenceImageUrl(`http://localhost:8008${result.url}`)
     }
   }, [uploadImage])
+
+  // Handle demo reference select
+  const handleDemoReferenceSelect = useCallback(async (file: File) => {
+    await handleReferenceUpload(file)
+  }, [handleReferenceUpload])
 
   // Handle reference image clear
   const handleReferenceClear = useCallback(() => {
@@ -808,6 +814,7 @@ function HomePageContent() {
         imageUrl: referenceImageUrl,
         onUpload: handleReferenceUpload,
         onClear: handleReferenceClear,
+        onDemoSelect: () => setShowDemoSelector(true),
         isUploading: uploading,
         active: pipelineStage === 'preparing' || pipelineStage === 'loading',
       },
@@ -1382,6 +1389,13 @@ function HomePageContent() {
         onClose={() => setModalOpen(false)}
         imageSrc={modalImageUrl}
         title="Generated Result"
+      />
+
+      {/* Demo Reference Selector */}
+      <DemoReferenceSelector
+        isOpen={showDemoSelector}
+        onClose={() => setShowDemoSelector(false)}
+        onSelect={handleDemoReferenceSelect}
       />
 
       {/* Report Modal */}

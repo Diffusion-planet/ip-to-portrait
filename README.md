@@ -29,6 +29,7 @@
   <a href="#개요">개요</a> |
   <a href="#주요-기능">주요 기능</a> |
   <a href="#웹-애플리케이션">웹 애플리케이션</a> |
+  <a href="#데모-레퍼런스-이미지-선택">데모 이미지</a> |
   <a href="#설치-방법">설치 방법</a> |
   <a href="#ai-파이프라인-구조">AI 파이프라인</a> |
   <a href="#api-엔드포인트">API 엔드포인트</a> |
@@ -424,6 +425,80 @@ VLM이 얼굴 특징을 분석하여 상세한 설명적 프롬프트를 생성�
 - JWT 토큰을 사용한 이메일/비밀번호 인증
 - 이름, 이메일, 비밀번호로 계정 생성
 - bcrypt를 사용한 안전한 비밀번호 해싱
+
+---
+
+### 데모 레퍼런스 이미지 선택
+
+레퍼런스 이미지 노드에서 데모 이미지를 빠르게 선택할 수 있는 캐러셀 모달을 제공한다.
+
+![Demo Reference Modal](images/Demo-Reference-modal.png)
+
+- **All / Male / Female / Special** 필터 탭으로 카테고리별 탐색
+- 3D 원근 효과 캐러셀로 이미지 탐색
+- 키보드(방향키, Enter, Escape) 및 화살표 버튼 지원
+- 선택 시 자동으로 레퍼런스 이미지로 업로드
+
+#### Demo 폴더 설정 가이드
+
+Demo 이미지는 **Git에 포함되지 않으므로** 별도로 준비해야 한다.
+
+**1. 폴더 위치**
+
+프로젝트 루트에 `Demo/` 폴더를 생성한다:
+
+```
+ip-to-portrait/
+├── Demo/                ← 여기에 이미지 배치
+│   ├── man_1.png
+│   ├── man_2.jpg
+│   ├── woman_1.jpg
+│   ├── woman_2.jpg
+│   ├── ironman.jpg
+│   └── ...
+├── web/
+│   └── frontend/
+│       └── public/
+│           └── demo → ../../Demo  (심볼릭 링크)
+└── ...
+```
+
+**2. 심볼릭 링크 생성**
+
+프론트엔드가 `public/demo/` 경로에서 이미지를 읽으므로 심볼릭 링크가 필요하다:
+
+```bash
+# 프로젝트 루트에서 실행
+ln -sf $(pwd)/Demo web/frontend/public/demo
+```
+
+**3. 파일 네이밍 규칙**
+
+파일명 접두사에 따라 프론트엔드에서 자동으로 카테고리가 분류된다:
+
+| 접두사 | 카테고리 | 예시 |
+|--------|----------|------|
+| `man_` | Male | `man_1.png`, `man_2.jpg` |
+| `woman_` | Female | `woman_1.jpg`, `woman_2.png` |
+| 그 외 | Special | `ironman.jpg`, `mona.jpg` |
+
+- **지원 형식**: `jpg`, `jpeg`, `png`, `webp`
+- **정렬**: 파일명의 숫자(`_N`)로 자연 정렬됨 (예: `man_1` → `man_2` → `man_10`)
+- 같은 카테고리 내에서 번호 순으로 정렬되며, 카테고리 간 정렬은 man → other → woman 순
+
+**4. 예시**
+
+```
+Demo/
+├── man_1.png          → Male 탭, 1번
+├── man_2.jpg          → Male 탭, 2번
+├── woman_1.jpg        → Female 탭, 1번
+├── woman_2.jpg        → Female 탭, 2번
+├── ironman.jpg        → Special 탭
+└── mona.jpg           → Special 탭
+```
+
+> **참고**: `Demo/` 폴더는 `.gitignore`에 포함되어 있어 Git에 추적되지 않는다. 새 환경에서 설치 시 이미지 파일을 별도로 준비해야 한다.
 
 ---
 
